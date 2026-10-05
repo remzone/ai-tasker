@@ -111,3 +111,15 @@ async def get_context(
         return await task_context(session, task_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
+
+
+@router.post("/{task_id}/run-agent", status_code=202)
+async def run_agent(task_id: int, session: AsyncSession = Depends(get_session),
+                    principal: Principal = Depends(get_current_principal)):
+    if not principal.is_user:
+        raise HTTPException(403, "human session required")
+    from agent_kanban.agent_runner import launch_agent
+    try:
+        return await launch_agent(session, task_id, f"user:{principal.user_id}")
+    except ValueError as exc:
+        raise HTTPException(404 if "not found" in str(exc) else 409, str(exc))

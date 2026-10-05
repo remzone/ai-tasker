@@ -64,6 +64,9 @@ export const api = {
       })
     );
   },
+  async runAgent(id: number): Promise<{ task_id: number; agent: string; mode: string }> {
+    return j(await fetch(`${BASE}/tasks/${id}/run-agent`, { method: "POST", credentials: "include" }));
+  },
   async workflow(id: number, action: "ready" | "start" | "review" | "human_review" | "accept" | "return", comment = "", reviewer?: string): Promise<Task> {
     return j(await fetch(`${BASE}/tasks/${id}/workflow`, {
       method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },

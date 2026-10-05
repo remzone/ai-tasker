@@ -219,7 +219,7 @@ def create_mcp() -> FastMCP:
     )
     mcp = FastMCP(
         "agent-kanban",
-        instructions="Before performing work or review, call get_task_context. Read and obey project_agent_instructions and agent_instructions, acceptance criteria and local AGENTS.md. Never expand the permitted file scope silently; ask the human if instructions conflict. The board does not execute agents or enforce a filesystem sandbox.",
+        instructions="Before performing work or review, call get_task_context. Read and obey project_agent_instructions and agent_instructions, acceptance criteria and local AGENTS.md. Never expand the permitted file scope silently; ask the human if instructions conflict. Agent execution requires an explicit human run-agent action; repository instructions remain mandatory.",
         streamable_http_path="/",
         transport_security=security,
     )

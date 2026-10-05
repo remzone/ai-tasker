@@ -105,7 +105,11 @@ def create_app() -> FastAPI:
         # the admin exists before any authenticated request can be served.
         await _bootstrap_admin()
         async with mcp_instance.session_manager.run():
-            yield
+            try:
+                yield
+            finally:
+                from agent_kanban.agent_runner import stop_runs
+                await stop_runs()
 
     app = FastAPI(title="Agent Kanban", version="0.1.0", lifespan=_lifespan)
     # Rate limiting (slowapi). Registered before routers so the SlowAPIMiddleware

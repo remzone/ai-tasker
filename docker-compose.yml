@@ -27,6 +27,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://kanban:kanban@postgres:5432/kanban
       PORT: "7331"
+      CODEX_COMMAND: ${CODEX_COMMAND:-codex}
+      CODEX_MCP_URL: ${CODEX_MCP_URL:-http://127.0.0.1:7331/mcp}
+      CODEX_TIMEOUT_SECONDS: ${CODEX_TIMEOUT_SECONDS:-3600}
       SESSION_SECRET: '${SESSION_SECRET:?SESSION_SECRET is required — generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"}'
       AGENT_KANBAN_ARTIFACT_DIR: /app/artifacts
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:${HOST_PORT:-7331}}

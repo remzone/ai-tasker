@@ -622,7 +622,7 @@ async def task_context(session: AsyncSession, task_id: int) -> dict:
     data["comments"] = [c.model_dump(mode="json") for c in comments]
     data["progress"] = [e.model_dump(mode="json") for e in progress]
     data["attachments"] = [dict(a.model_dump(mode="json"), content_url=f"/api/artifacts/{a.id}/content") for a in artifacts]
-    data["repository_instructions"] = "Work directly in repo_path. Read AGENTS.md and repository skills/instructions before changes. The board never executes Codex."
+    data["repository_instructions"] = "Work directly in repo_path. Read AGENTS.md and repository skills/instructions before changes. Codex can be launched only by an explicit human run-agent action."
     data["project_agent_instructions"] = project.agent_instructions if project else ""
     data["effective_agent_instructions"] = "\n\n".join(
         text for text in (data["project_agent_instructions"], task.agent_instructions) if text

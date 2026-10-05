@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+asyncpg://kanban:kanban@localhost:5436/kanban"
+    codex_command: str = "codex"
+    codex_mcp_url: str = ""
+    codex_timeout_seconds: int = Field(default=3600, gt=0)
     port: int = 7331
     cors_origins: list[str] = ["http://localhost:5173"]
     session_secret: str = "dev-insecure-secret-change-me"  # override via env in prod

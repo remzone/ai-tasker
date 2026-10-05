@@ -30,7 +30,6 @@ export function NewTaskModal({ onClose, onCreated, project, task }: {
   // A persisted ID prevents duplicate task creation if an upload needs retrying.
   const [savedId, setSavedId] = useState<number | null>(task?.id ?? null);
   useEffect(() => { api.listTokens().then(tokens => setAgents([...new Set(tokens.map(tk => tk.agent_name))])).catch(() => {}); }, []);
-  useEffect(() => { const listener = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); }; window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener); }, [busy, onClose]);
   function pasteScreenshots(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     if (busy) return;
     const items = Array.from(e.clipboardData.items);
@@ -78,7 +77,7 @@ export function NewTaskModal({ onClose, onCreated, project, task }: {
     } catch(e) { setError(e instanceof Error ? e.message : t("newTask.error")); }
     finally { setBusy(false); }
   }
-  return <div className="modal-backdrop" onClick={() => !busy && onClose()}>
+  return <div className="modal-backdrop">
     <form className="card modal task-modal" role="dialog" aria-modal="true" aria-labelledby="task-form-title" onClick={e => e.stopPropagation()} onSubmit={submit}>
       <div className="modal-heading"><div><div className="eyebrow">{project?.name ?? "AI Tasker"}</div><h2 id="task-form-title">{task ? t("form.editTask") : t("newTask.title")}</h2></div><button className="btn btn-ghost" type="button" disabled={busy} aria-label={t("common.close")} onClick={onClose}>×</button></div>
       <label>{t("newTask.titleLabel")}<input className="input" autoFocus required value={title} onChange={e => setTitle(e.target.value)} placeholder={t("newTask.titlePlaceholder")} /></label>

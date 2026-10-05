@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { api } from "../api";
 import type { Task } from "../types";
 import { useT } from "../i18n.tsx";
 
@@ -18,6 +20,11 @@ export function TaskCard({
   lastProgressAt?: string;
 }) {
   const { t } = useT();
+  const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState("");
+  const version = `${task.id}:${task.status}:${task.updated_at}:${task.reviewer}`;
+  const [launchedVersion, setLaunchedVersion] = useState<string | null>(null);
+  const started = launchedVersion === version;
   const isLive = task.status === "in_progress" && lastProgressAt
     ? Date.now() - new Date(lastProgressAt).getTime() < LIVE_WINDOW_MS
     : false;
@@ -53,6 +60,21 @@ export function TaskCard({
         </span>
       </div>
 
+      {["ready", "review"].includes(task.status) && <div style={{ margin: "8px 0" }}>
+        <button className="btn btn-primary" draggable={false}
+          disabled={launching || started || (task.status === "review" ? !!task.reviewer : !!task.claimed_by)}
+          onKeyDown={event => event.stopPropagation()}
+          onClick={async event => {
+            event.stopPropagation();
+            setLaunching(true); setLaunchError("");
+            try { await api.runAgent(task.id); setLaunchedVersion(version); }
+            catch (error) { setLaunchError(error instanceof Error ? error.message : String(error)); }
+            finally { setLaunching(false); }
+          }}>
+          {launching ? t("agent.launching") : task.reviewer || started ? t("agent.running") : task.status === "review" ? t("agent.review") : t("agent.run")}
+        </button>
+        {launchError && <p role="alert" className="error">{launchError}</p>}
+      </div>}
       {task.description && <p className="task-excerpt">{task.description}</p>}
       {!task.reviewer && task.review_assigned_to && <p className="muted" style={{ fontSize: 12 }}>{t("workflow.assignedReview", { name: task.review_assigned_to })}</p>}
       {task.reviewer && <p className="muted" style={{ fontSize: 12 }}>{t("card.reviewer", { name: task.reviewer })}</p>}
