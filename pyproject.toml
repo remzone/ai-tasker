@@ -1,7 +1,7 @@
 [project]
 name = "agent-kanban"
 version = "0.1.0"
-description = "AI-native kanban board for agents via MCP"
+description = "AI Tasker: project kanban with AI review and human acceptance via MCP"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -30,6 +30,7 @@ dependencies = [
     "websockets>=13",
     "python-multipart>=0.0.12",
     "bcrypt>=4.2",
+    "cryptography>=44",
     "itsdangerous>=2.2",
     "slowapi>=0.1.9",
 ]
@@ -49,9 +50,9 @@ kanban = "agent_kanban.cli:main"
 kanban-mcp = "agent_kanban.mcp_stdio_bridge:main"
 
 [project.urls]
-Homepage = "https://github.com/graywrk/agent-kanban"
-Repository = "https://github.com/graywrk/agent-kanban"
-Issues = "https://github.com/graywrk/agent-kanban/issues"
+Homepage = "https://github.com/remzone/ai-tasker"
+Repository = "https://github.com/remzone/ai-tasker"
+Issues = "https://github.com/remzone/ai-tasker/issues"
 
 [build-system]
 requires = ["hatchling"]

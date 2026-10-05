@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.lowlevel.server import request_ctx
 from mcp.server.transport_security import TransportSecuritySettings
 
 from agent_kanban.auth import Principal, _resolve_bearer
@@ -48,15 +49,11 @@ from agent_kanban.services import (
 )
 
 # --- MCP principal resolution -------------------------------------------------
-# The pinned `mcp` SDK (1.28.x) does NOT expose the underlying Starlette
-# request to tool functions (no `mcp.server.fastmcp.context.get_http_request`).
-# We resolve the bearer Principal in a Starlette middleware that wraps the
-# mounted /mcp app and stores the resolved Principal (or None) in a ContextVar;
-# the verifiers below read that ContextVar. Resolution happens once per HTTP
-# request and is shared by every tool invoked within it. In-process
-# `mcp.call_tool` calls (tests, programmatic use) bypass HTTP entirely — tests
-# monkeypatch the verifiers (see tests/test_mcp_server.py) so the ContextVar is
-# never consulted in that path.
+# Streamable HTTP sessions run tools in a background task whose ContextVars
+# originate at initialize. Resolve each message's identity from the HTTP Request
+# carried by the SDK request context, never from that session task's context.
+# The ContextVar remains available only for direct, in-process invocation.
+_PRINCIPAL_SCOPE_KEY = "agent_kanban.mcp_principal"
 _mcp_principal: contextvars.ContextVar[Optional[Principal]] = contextvars.ContextVar(
     "_mcp_principal", default=None
 )
@@ -68,7 +65,7 @@ class MCPAuthMiddleware:
     Mounted around the FastMCP streamable-HTTP app in server.create_app(). It
     reads ``Authorization: Bearer <token>`` on every /mcp request, resolves it
     to a Principal via the shared token lookup, and stores the result (None if
-    absent/invalid) in ``_mcp_principal`` for the tool functions to read. It
+    absent/invalid) in the HTTP scope for the tool functions to read. It
     never blocks — enforcement is the verifiers' job so the failure surfaces as
     a tool result, not an HTTP error, which is the intended agent UX.
     """
@@ -92,11 +89,34 @@ class MCPAuthMiddleware:
                         async with AsyncSessionLocal() as s:
                             principal = await _resolve_bearer(s, token_value)
                     break
-        token = _mcp_principal.set(principal)
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            _mcp_principal.reset(token)
+        scope[_PRINCIPAL_SCOPE_KEY] = principal
+        await self.app(scope, receive, send)
+
+
+def _current_principal() -> Optional[Principal]:
+    context = request_ctx.get(None)
+    request = context.request if context is not None else None
+    if request is not None:
+        # Missing/invalid auth must remain None; do not fall back to an identity
+        # inherited by the long-lived MCP session task.
+        return request.scope.get(_PRINCIPAL_SCOPE_KEY)
+    return _mcp_principal.get()
+
+
+def _authentication_error() -> PermissionError:
+    context = request_ctx.get(None)
+    request = context.request if context is not None else None
+    reason = "no authenticated request context"
+    if request is not None:
+        authz = request.headers.get("authorization")
+        if authz is None:
+            reason = "Authorization header is missing"
+        elif not authz.lower().startswith("bearer ") or not authz[7:].strip():
+            reason = "Authorization must contain Bearer followed by the agent token"
+        else:
+            reason = "Bearer token is invalid or revoked"
+    # Report the failure category only; never include a token or header value.
+    return PermissionError(f"authentication required (Bearer token): {reason}")
 
 
 async def _require_matching_agent(agent: str) -> Principal:
@@ -107,9 +127,9 @@ async def _require_matching_agent(agent: str) -> Principal:
     ``agent`` differs from the token's bound ``agent_name``. The error surfaces
     to the agent as a tool result (the SDK converts raised exceptions).
     """
-    principal = _mcp_principal.get()
+    principal = _current_principal()
     if principal is None:
-        raise PermissionError("authentication required (Bearer token)")
+        raise _authentication_error()
     if agent != principal.agent_name:
         raise PermissionError(
             f"agent {agent!r} does not match the authenticated token's "
@@ -124,9 +144,9 @@ async def _require_any_principal() -> Principal:
     Used by read tools (get_next_task, list_tasks, get_comments): any
     authenticated principal may read; the agent arg is not bound.
     """
-    principal = _mcp_principal.get()
+    principal = _current_principal()
     if principal is None:
-        raise PermissionError("authentication required (Bearer token)")
+        raise _authentication_error()
     return principal
 
 
@@ -151,6 +171,11 @@ def _task_to_dict(task) -> dict:
         "id": task.id,
         "title": task.title,
         "description": task.description,
+        "agent_instructions": task.agent_instructions,
+        "acceptance_criteria": task.acceptance_criteria,
+        "work_summary": task.work_summary,
+        "reviewer": task.reviewer,
+        "review_assigned_to": task.review_assigned_to,
         "status": task.status.value if hasattr(task.status, "value") else task.status,
         "tags": task.tags,
         "claimed_by": task.claimed_by,
@@ -194,6 +219,7 @@ def create_mcp() -> FastMCP:
     )
     mcp = FastMCP(
         "agent-kanban",
+        instructions="Before performing work or review, call get_task_context. Read and obey project_agent_instructions and agent_instructions, acceptance criteria and local AGENTS.md. Never expand the permitted file scope silently; ask the human if instructions conflict. The board does not execute agents or enforce a filesystem sandbox.",
         streamable_http_path="/",
         transport_security=security,
     )
@@ -203,8 +229,9 @@ def create_mcp() -> FastMCP:
         tags_any: Optional[list[str]] = None,
         tags_all: Optional[list[str]] = None,
         exclude_tags: Optional[list[str]] = None,
+        project_id: Optional[int] = None,
     ) -> Optional[dict]:
-        """Return the next ready task (oldest first). Returns null if none.
+        """Return the next ready or returned-unclaimed in_progress task (oldest first). Returns null if none.
 
         Filters:
           tags_any: task must have at least one of these tags
@@ -219,7 +246,7 @@ def create_mcp() -> FastMCP:
         principal = await _require_any_principal()
         async with session() as s:
             task = await svc_get_next_task(
-                s, tags_any, tags_all, exclude_tags, agent=principal.agent_name
+                s, tags_any, tags_all, exclude_tags, agent=principal.agent_name, project_id=project_id
             )
             if task is None:
                 return None
@@ -242,7 +269,7 @@ def create_mcp() -> FastMCP:
 
     @mcp.tool()
     async def list_tasks(
-        status: Optional[str] = None, tags_any: Optional[list[str]] = None
+        status: Optional[str] = None, tags_any: Optional[list[str]] = None, project_id: Optional[int] = None
     ) -> list[dict]:
         """List tasks, optionally filtered by status and/or tags. Does not claim.
 
@@ -252,7 +279,7 @@ def create_mcp() -> FastMCP:
         principal = await _require_any_principal()
         status_enum = TaskStatus(status) if status else None
         async with session() as s:
-            tasks = await svc_list_tasks(s, status_enum, tags_any, agent=principal.agent_name)
+            tasks = await svc_list_tasks(s, status_enum, tags_any, agent=principal.agent_name, project_id=project_id)
             return [_task_to_dict(t) for t in tasks]
 
     @mcp.tool()
@@ -296,7 +323,7 @@ def create_mcp() -> FastMCP:
     async def complete_task(
         task_id: int, agent: str, summary: Optional[str] = None
     ) -> dict:
-        """Mark a task done. Requires task.claimed_by == agent."""
+        """Submit completed work for AI review (compatibility alias of request_review). Never marks Done; human acceptance is required."""
         await _require_matching_agent(agent)
         async with session() as s:
             task = await svc_complete_task(s, task_id, agent, summary)
@@ -306,7 +333,7 @@ def create_mcp() -> FastMCP:
     async def request_review(
         task_id: int, agent: str, summary: Optional[str] = None
     ) -> dict:
-        """Mark a task ready for review. Requires task.claimed_by == agent."""
+        """Submit an active task for AI review. A nonempty summary describing files/commits/tests is required. Requires task.claimed_by == agent; cannot bypass human acceptance."""
         await _require_matching_agent(agent)
         async with session() as s:
             task = await svc_request_review(s, task_id, agent, summary)
@@ -397,6 +424,52 @@ def create_mcp() -> FastMCP:
         async with session() as s:
             task = await svc_set_task_pr(s, task_id, agent, pr_url, status)
             return _task_to_dict(task)
+
+    @mcp.tool()
+    async def list_projects() -> list[dict]:
+        """Discover projects and their repository paths."""
+        await _require_any_principal()
+        from agent_kanban.models import Project
+        from sqlmodel import select
+        async with session() as s:
+            rows = (await s.execute(select(Project).order_by(Project.id))).scalars()
+            return [p.model_dump(mode="json") for p in rows]
+
+    @mcp.tool()
+    async def get_task_context(task_id: int) -> dict:
+        """Required before execution or review: read project/task restrictions, full agent_prompt, task, criteria, repository, comments, attachments, results and history. Read repository AGENTS.md/skills locally before working."""
+        await _require_any_principal()
+        from agent_kanban.services import task_context
+        async with session() as s:
+            return await task_context(s, task_id)
+
+    @mcp.tool()
+    async def get_next_review() -> Optional[dict]:
+        """Discover the oldest unclaimed review. Call claim_review, then get_task_context."""
+        principal = await _require_any_principal()
+        from agent_kanban.models import Task
+        from sqlalchemy import or_
+        from sqlmodel import select
+        async with session() as s:
+            task = (await s.execute(select(Task).where(Task.status == TaskStatus.REVIEW, Task.reviewer.is_(None), or_(Task.review_assigned_to.is_(None), Task.review_assigned_to == principal.agent_name)).order_by(Task.updated_at, Task.id).limit(1))).scalars().first()
+            return _task_to_dict(task) if task else None
+
+    @mcp.tool()
+    async def claim_review(task_id: int, agent: str) -> dict:
+        """Atomically reserve an AI review for the authenticated reviewer. Preserves the implementation author."""
+        await _require_matching_agent(agent)
+        from agent_kanban.services import claim_review as claim
+        async with session() as s:
+            result = await claim(s, task_id, agent)
+            return {"ok": result.ok, "reason": result.reason, "task": _task_to_dict(result.task) if result.task else None}
+
+    @mcp.tool()
+    async def submit_review(task_id: int, agent: str, decision: str, comment: str) -> dict:
+        """After claim_review: APPROVE → acceptance; REQUEST_CHANGES → in_progress (available for claim_task). Findings are mandatory and preserved. Never closes the task."""
+        await _require_matching_agent(agent)
+        from agent_kanban.services import submit_review as submit
+        async with session() as s:
+            return _task_to_dict(await submit(s, task_id, agent, decision, comment))
 
     return mcp
 

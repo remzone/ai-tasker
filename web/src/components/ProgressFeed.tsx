@@ -78,6 +78,7 @@ function ProgressItem({
   event: ProgressEvent;
   forceExpanded: boolean;
 }) {
+  const { t } = useT();
   const [expanded, setExpanded] = useState(false);
   const effectiveExpanded = forceExpanded || expanded;
   const ts = new Date(event.created_at).toLocaleTimeString(localeBcp47());
@@ -96,7 +97,7 @@ function ProgressItem({
         }}
       >
         <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
-        <span className="mono">{content}</span>
+        <span className="mono">{content === "Planning transition" ? t("progress.planning") : content}</span>
         <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
       </div>
     );

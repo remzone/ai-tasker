@@ -19,37 +19,24 @@ async def test_post_and_list_comments(authed_client):
 
 
 @pytest.mark.asyncio
-async def test_comment_on_review_task_moves_to_in_progress(authed_client):
-    # Create a task and move it to review directly.
-    r = await authed_client.post("/api/tasks", json={"title": "t"})
+async def test_comment_on_review_does_not_decide_review(authed_client):
+    r = await authed_client.post("/api/tasks", json={"title": "t", "status": "ready"})
     task_id = r.json()["id"]
-    await authed_client.patch(f"/api/tasks/{task_id}", json={"status": "review"})
-
-    # Post a comment with no explicit status.
-    r = await authed_client.post(
-        f"/api/tasks/{task_id}/comments",
-        json={"author": "user", "content": "please also handle the empty case"},
-    )
+    from agent_kanban.mcp_server import mcp
+    await mcp.call_tool("claim_task", {"task_id": task_id, "agent": "codex"})
+    await mcp.call_tool("request_review", {"task_id": task_id, "agent": "codex", "summary": "Done"})
+    r = await authed_client.post(f"/api/tasks/{task_id}/comments", json={"author": "user", "content": "Question about this work"})
     assert r.status_code == 201
-
-    # Task should now be in_progress.
-    r = await authed_client.get(f"/api/tasks/{task_id}")
-    assert r.json()["status"] == "in_progress"
+    assert (await authed_client.get(f"/api/tasks/{task_id}")).json()["status"] == "review"
 
 
 @pytest.mark.asyncio
-async def test_comment_with_explicit_ready_status(authed_client):
+async def test_comment_cannot_bypass_review(authed_client):
     r = await authed_client.post("/api/tasks", json={"title": "t"})
     task_id = r.json()["id"]
-    await authed_client.patch(f"/api/tasks/{task_id}", json={"status": "review"})
-
-    r = await authed_client.post(
-        f"/api/tasks/{task_id}/comments?status=ready",
-        json={"author": "user", "content": "redo it"},
-    )
-    assert r.status_code == 201
-    r = await authed_client.get(f"/api/tasks/{task_id}")
-    assert r.json()["status"] == "ready"
+    r = await authed_client.post(f"/api/tasks/{task_id}/comments?status=done", json={"author": "user", "content": "bypass"})
+    assert r.status_code == 409
+    assert (await authed_client.get(f"/api/tasks/{task_id}")).json()["status"] == "todo"
 
 
 @pytest.mark.asyncio

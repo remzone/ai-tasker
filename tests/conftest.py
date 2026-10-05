@@ -22,7 +22,7 @@ async def _create_test_db() -> str:
     unique = f"kanban_test_{os.getpid()}_{int(time.time())}_{uuid.uuid4().hex[:6]}"
     conn = await asyncpg.connect(TEST_DB_TEMPLATE)
     try:
-        await conn.execute(f'CREATE DATABASE "{unique}"')
+        await conn.execute(f"CREATE DATABASE \"{unique}\" TEMPLATE template0 ENCODING 'UTF8'")
     finally:
         await conn.close()
     return unique
@@ -139,8 +139,8 @@ def _stub_mcp_principal(monkeypatch):
     """Stub the MCP principal verifiers for in-process tool calls.
 
     `mcp.call_tool` runs tools directly — there is no HTTP request, so the
-    ``_mcp_principal`` ContextVar (populated by MCPAuthMiddleware during real
-    serving) is empty and the verifiers would reject every call. We patch the
+    HTTP request principal is absent and the verifiers would reject every
+    call. We patch the
     two verifier functions on the mcp_server module so they return a fixed
     Principal(agent_name="codex") without touching the request path. Tests that
     pass ``agent="codex"`` pass; tests asserting authz-rejection (agent !=

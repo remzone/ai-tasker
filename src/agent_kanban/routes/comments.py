@@ -8,7 +8,7 @@ from agent_kanban.auth import Principal, get_current_principal
 from agent_kanban.db import get_session
 from agent_kanban.models import TaskStatus
 from agent_kanban.schemas import CommentCreate, CommentRead
-from agent_kanban.services import get_task, list_comments, post_comment_with_status
+from agent_kanban.services import list_comments, post_comment_with_status
 
 router = APIRouter(prefix="/api/tasks/{task_id}/comments", tags=["comments"])
 
@@ -34,12 +34,10 @@ async def add_comment(
     session: AsyncSession = Depends(get_session),
     principal: Principal = Depends(get_current_principal),
 ):
-    if data.author == "":
-        data.author = "user"
-    # Resolve target status: explicit query param wins; else auto review→in_progress.
+    from fastapi import HTTPException
     if status is not None:
-        target = status
-    else:
-        task = await get_task(session, task_id)
-        target = TaskStatus.IN_PROGRESS if task.status == TaskStatus.REVIEW else None
-    return await post_comment_with_status(session, task_id, data.author, data.content, target)
+        raise HTTPException(409, "use the dedicated review/acceptance operation")
+    try:
+        return await post_comment_with_status(session, task_id, principal.agent_name, data.content, None)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))

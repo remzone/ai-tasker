@@ -20,3 +20,11 @@ htmlcov/
 # Deployment-specific compose (private hostnames, prod secrets) — not for OSS
 /docker-compose.hiplet.yml
 /docker-compose.*.yml
+
+# Isolated local tooling, database, logs and browser evidence
+/.tools/
+/.runtime/
+
+# Docker configuration contains a generated session secret
+.env.docker
+.env.*.local

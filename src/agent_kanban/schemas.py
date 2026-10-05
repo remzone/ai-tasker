@@ -1,8 +1,8 @@
 """Pydantic schemas for the API surface (REST + MCP)."""
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from agent_kanban.models import ProgressKind, TaskStatus
 
@@ -17,10 +17,17 @@ class ReadBase(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @field_serializer("created_at", "updated_at", "claimed_at", check_fields=False, when_used="json")
+    def utc_timestamp(self, value):
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
+
 
 # ---- Project ----
 class ProjectCreate(BaseModel):
     name: str
+    agent_instructions: str = ""
     repo_path: Optional[str] = None
     default_branch: Optional[str] = None
 
@@ -28,15 +35,25 @@ class ProjectCreate(BaseModel):
 class ProjectRead(ReadBase):
     id: int
     name: str
+    agent_instructions: str = ""
     repo_path: Optional[str] = None
     default_branch: Optional[str] = None
     created_at: datetime
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    repo_path: Optional[str] = None
+    default_branch: Optional[str] = None
+    agent_instructions: Optional[str] = None
 
 
 # ---- Task ----
 class TaskCreate(BaseModel):
     title: str
     description: str = ""
+    agent_instructions: str = ""
+    acceptance_criteria: str = ""
     tags: list[str] = Field(default_factory=list)
     project_id: Optional[int] = None
     status: TaskStatus = TaskStatus.TODO
@@ -50,6 +67,8 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    agent_instructions: Optional[str] = None
+    acceptance_criteria: Optional[str] = None
     tags: Optional[list[str]] = None
     status: Optional[TaskStatus] = None
     sort_order: Optional[float] = None
@@ -69,6 +88,11 @@ class TaskRead(ReadBase):
     project_id: Optional[int] = None
     title: str
     description: str
+    agent_instructions: str = ""
+    acceptance_criteria: str = ""
+    work_summary: str = ""
+    review_assigned_to: Optional[str] = None
+    reviewer: Optional[str] = None
     status: TaskStatus
     tags: list[str]
     claimed_by: Optional[str] = None
@@ -139,3 +163,8 @@ class ClaimResult(BaseModel):
     ok: bool
     reason: Optional[str] = None
     task: Optional[TaskRead] = None
+
+
+class AcceptanceDecision(BaseModel):
+    approve: bool
+    comment: str = ""

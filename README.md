@@ -1,225 +1,181 @@
-# Agent Kanban
+# AI Tasker
 
-[![Languages: RU / EN](https://img.shields.io/badge/README-EN-amber.svg)](README.md)
-[![Languages: RU / EN](https://img.shields.io/badge/README-RU-lightgrey.svg)](README.ru.md)
+Минимальная рабочая система задач на основе [Agent Kanban](https://github.com/graywrk/agent-kanban):
 
-> **English** · [Русский](README.ru.md)
+**Проект → Бэклог → Готово → В работе → Проверка → Приёмка → Выполнено.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-amber.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![MCP](https://img.shields.io/badge/MCP-streamable_HTTP-orange.svg)](https://modelcontextprotocol.io/)
+AI Tasker — пассивная доска и MCP-сервер. Ваш Codex из VS Code подключается к доске и работает непосредственно в указанном репозитории. Приложение не запускает Codex, не вызывает OpenAI API и не требует `OPENAI_API_KEY`.
 
-An AI-native kanban board where agents (Codex, Hermes, etc.) pull tasks via
-the Model Context Protocol. The board is passive — it never spawns or controls
-agents. You point your agents at the board via MCP config, and they
-self-serve tasks through `get_next_task` / `claim_task`.
+## Быстрый запуск через Docker
 
-## Why?
+Нужен только Docker Desktop или Docker Engine с Compose v2+. Python, Node и PostgreSQL на компьютере устанавливать не нужно.
 
-Most agent orchestrators **push** work: a dispatcher decides who does what and
-sends it. Agent Kanban inverts this — the board is a passive **MCP server**.
-Agents discover and claim work when they're ready, exactly like a developer
-picks a ticket from a real kanban. This decouples "what needs doing" (the board)
-from "who does it and when" (the agent), and works with any agent that speaks
-MCP — no glue code per agent.
-
-## Features
-
-- **Pull-based MCP** — board exposes 11 tools (`get_next_task`, `claim_task`,
-  `post_progress`, `request_review`, …) over the streamable-HTTP transport
-- **Hard assignment** — reserve a task for a specific agent; others don't see it
-- **Live progress feed** — agents stream diffs, text, artifacts, errors; you
-  comment back and the agent reads your feedback on the next turn
-- **Bilingual UI** — Russian / English, with a one-click language toggle
-- **Review diffs** — the board collects `git diff base...branch` on
-  `request_review` and renders it inline (Shiki syntax highlighting)
-- **Design system** — dark-first, single-amber-accent UI built on tokens
-- **Self-hosted** — FastAPI + PostgreSQL + React; ships as a Docker image
-
-## Screenshots
-
-<table>
-  <tr>
-    <td width="50%" align="center"><b>Board (dark)</b></td>
-    <td width="50%" align="center"><b>Card detail</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/board.png" alt="Board view"></td>
-    <td><img src="docs/screenshots/card-detail.png" alt="Card detail"></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>First-run setup</b></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><img src="docs/screenshots/login.png" alt="Login / setup screen" width="50%"></td>
-  </tr>
-</table>
-
-## Architecture
-
-See `docs/superpowers/specs/2026-07-05-agent-kanban-design.md` for the full
-design. Phase 1 MVP scope is documented in
-`docs/superpowers/plans/2026-07-06-agent-kanban-phase1-mvp.md`.
-
-## Quickstart (local dev)
-
-### Prerequisites
-- Python 3.11+
-- `uv` (install: `curl -LsSf https://astral.sh/uv/install.sh | sh`)
-- Node.js 20+ and `pnpm`
-- PostgreSQL 16+ running locally
-
-### 1. Database
 ```bash
-createdb kanban  # or use docker: see docker-compose.yml
-cp .env.example .env  # DATABASE_URL defaults to port 5436 (matches docker-compose ak-pg)
-uv run kanban migrate
+git clone https://github.com/remzone/ai-tasker.git
+cd ai-tasker
+sh scripts/start-docker.sh
 ```
 
-### 2. Backend
+Откройте **http://localhost:7331** и создайте администратора (пароль от 8 символов). Затем создайте проект, укажите абсолютный путь к репозиторию **на компьютере агента** и основную ветку. Создайте задачу и переведите её в **Готово**, чтобы агент мог забрать её через MCP.
+
+Скрипт один раз создаёт `.env.docker` со случайным `SESSION_SECRET`, собирает frontend/backend, запускает PostgreSQL, применяет миграции и ожидает готовности приложения. `.env.docker` не попадает в git; сохраняйте его вместе с резервной копией данных. Существующий `.env` для разработки не изменяется.
+
+На Windows запускайте скрипт в Git Bash / WSL либо используйте ручной вариант в PowerShell:
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+# Скопируйте результат следующей команды в SESSION_SECRET файла .env.docker:
+docker run --rm python:3.11-slim python -c "import secrets; print(secrets.token_urlsafe(48))"
+docker compose --env-file .env.docker up -d --build --wait
+```
+
+```bash
+docker compose --env-file .env.docker logs -f app   # логи приложения
+docker compose --env-file .env.docker down          # остановка, данные сохраняются
+sh scripts/start-docker.sh                          # запуск / обновление после git pull
+```
+
+Задачи и пользователи хранятся в volume `ak_pgdata`, вложения — в `ak_artifacts` (Compose добавляет префикс проекта). `down --volumes` удаляет эти данные. Приложение доступно только на localhost; PostgreSQL не публикует порт на хосте. Если порт занят, поменяйте `HOST_PORT` в `.env.docker`; используйте тот же порт в браузере и MCP URL. Для внешнего доступа настройте HTTPS reverse proxy и `PUBLIC_URL`.
+
+Агент работает с файлами на своей машине. Чтобы **сервер в Docker** также мог собирать git diff и читать локальные артефакты, примонтируйте репозиторий по тому же абсолютному пути, что указан в проекте. Например, создайте `docker-compose.repositories.yml`:
+
+```yaml
+services:
+  app:
+    volumes:
+      - /absolute/path/to/repository:/absolute/path/to/repository:ro
+```
+
+После первого запуска:
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.repositories.yml up -d --wait
+```
+
+Повторяйте эту команду при обновлении контейнера с дополнительными mounts. На Windows/WSL путь внутри контейнера должен быть Linux-путём; у агента должен быть доступ к соответствующему рабочему репозиторию. Без mounts задачи, MCP, загрузка файлов через HTTP и ручная приёмка работают, но серверный git diff недоступен.
+
+## Скриншоты AI Tasker
+
+Текущий интерфейс форка: светлая тема, русский язык, проект SD.
+
+![Kanban: шесть этапов работы](docs/screenshots/board.png)
+
+![Карточка задачи: результат и история приёмки](docs/screenshots/card-detail.png)
+
+![Вход в AI Tasker](docs/screenshots/login.png)
+
+## Основные отличия от Agent Kanban
+
+Основа — [graywrk/agent-kanban](https://github.com/graywrk/agent-kanban), исходный commit `a59b346`. История Git и MIT-лицензия оригинала сохранены.
+
+- Новый интерфейс AI Tasker: список проектов, навигация, светлая/тёмная темы и адаптивная доска; русский и английский языки.
+- Шесть этапов: **Бэклог → Готово → В работе → Проверка → Приёмка → Выполнено**. Отдельные AI review и человеческая приёмка, возврат на доработку с обязательным комментарием и история решений.
+- Атомарный захват работы и ревью; назначение конкретного reviewer, защита от конкурентных решений и обхода человеческой приёмки через агентский токен.
+- Настройки инструкций проекта и задачи, шаблоны и полный промпт для агента в интерфейсе и MCP-контексте.
+- Вставка скриншотов в описание через буфер обмена и загрузка вложений.
+- Повторный показ MCP-токенов администратору, зашифрованное хранение, замена токена, проверка подключения и копирование конфигурации клиента.
+- Docker-запуск одной командой со случайным session secret, миграциями, проверкой готовности и сохранением данных.
+
+Приложение сохраняет pull-модель оригинала: агенты сами забирают задания через MCP.
+
+## Подключить Codex из VS Code
+
+1. В AI Tasker откройте **Настройки и MCP**, создайте токен с agent_name `codex`. Для отдельного reviewer можно создать `codex-reviewer`.
+2. В строке агента нажмите **Показать / копировать**, затем **Проверить MCP**. Проверка выполняет реальные `list_projects` и `list_tasks` с этим токеном, без браузерной session cookie.
+3. Нажмите **Копировать конфиг Codex** и замените существующий блок `mcp_servers.tasker` в конфиге используемого Codex. Копируемый блок уже содержит URL и действующий Authorization:
+
+```toml
+[mcp_servers.tasker]
+url = "http://localhost:7331/mcp"
+
+[mcp_servers.tasker.http_headers]
+Authorization = "Bearer ВАШ_ТОКЕН_АГЕНТА"
+```
+
+4. В форме MCP можно оставить `Bearer token env var` пустым и вставить **Копировать Authorization** в Headers → Authorization. Сохраните, перезапустите расширение и откройте новый чат.
+
+Токен можно повторно показать после обновления страницы. Новые токены хранятся зашифрованными с ключом, полученным из `SESSION_SECRET`; секреты не возвращаются в общем списке токенов. Расшифровка и замена доступны только администратору с браузерной сессией. Стабильный `SESSION_SECRET` нужен для повторного показа; после его смены токены продолжат авторизовываться по хешу, а для повторного показа потребуется **Заменить**. Старые токены, сохранённые только как хеши, нельзя восстановить: **Сгенерировать токен** заменяет значение, сохраняя имя агента и описание. Замена немедленно отключает старый токен; обновите конфиги его клиентов.
+
+`SESSION_SECRET` не является MCP-токеном. При желании можно использовать `bearer_token_env_var = "AI_TASKER_MCP_TOKEN"` вместо `http_headers`: задайте переменную именно в окружении процесса Codex до его запуска. Секреты не добавляйте в git.
+
+Параметры Streamable HTTP и конфигурация CLI/IDE сверены с [официальной документацией Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+В поле **Описание** при создании или редактировании задачи можно вставить скриншот через **Ctrl+V** (⌘V на Mac). Изображение появится в предпросмотре и загрузится как вложение при сохранении; оно остаётся в тексте задачи после перезагрузки.
+
+## Работа агента
+
+Попросите Codex: «Возьми доступную задачу из AI Tasker через MCP и выполни её».
+
+- `list_projects`, `get_next_task` / `list_tasks` — обнаружение работы.
+- `claim_task(task_id, agent="codex")` — атомарный claim. Два агента не могут взять одну задачу.
+- `get_task_context(task_id)` — описание, criteria, repository path, comments, attachments, summary и вся история работы/решений.
+- Прочитайте AGENTS.md и skills **в указанном repository**. Создание ветки, изменение файлов, commits и tests выполняйте собственными инструментами Codex в repository.
+- `post_progress` / `post_comment` / `post_artifact` — сообщайте progress и результаты. `get_comments` — читайте обратную связь.
+- `set_task_branch` / `set_task_pr` — сохраните ветку/PR, если они есть.
+- `request_review(task_id, agent="codex", summary="Что сделано; commits/files/tests")` — передайте работу на AI review. Summary обязателен; diff собирается существующим git механизмом, если доступны repo/base/branch.
+- Старый `complete_task` теперь также отправляет на **Проверку**, чтобы не обходить AI review и человеческую приёмку.
+
+## AI review и приёмка
+
+В карточке результата доступны **Отправить на ревью агенту**, **Отправить на проверку человеку** и **Проверено — принять человеком**. Для агентского ревью укажите имя агента с действующим токеном и описание результата. Задача закрепляется за выбранным ревьюером; приложение остаётся пассивным, а агент забирает проверку через MCP.
+
+Reviewer вызывает `get_next_review`, затем `claim_review`, читает `get_task_context` и проверяет код/результат. Назначенные другому агенту проверки не выдаются и не могут быть захвачены. Claim reviewer хранится отдельно от исполнителя; reviewer может использовать тот же Codex под тем же agent_name, либо отдельный токен/agent_name.
+
+```text
+submit_review(task_id, agent, decision="APPROVE", comment="Результаты проверки")
+→ Приёмка
+
+submit_review(task_id, agent, decision="REQUEST_CHANGES", comment="Что исправить")
+→ В работе
+```
+
+Замечания обязательны и сохраняются в comments/history. После возврата claim исполнителя освобождается, задача остаётся **В работе** и снова доступна через `get_next_task` / `claim_task`. Вернуться к ней может прежний или другой разрешённый агент; hard assignment сохраняется.
+
+В **Приёмке** человек видит исходную задачу, criteria, summary, progress, diff/commits/tests (переданные агентом), attachments, review и историю возвратов. Кнопки:
+
+- **Проверено — принять человеком** → Выполнено. Человек может лично проверить результат и принять его также из **В работе** или **Проверки**, не дожидаясь AI-вердикта.
+- **Вернуть на доработку** с обязательным комментарием → В работе; цикл повторяется.
+
+Bearer-токен агента не может выполнить человеческие решения. Обычный комментарий не меняет статус. Перенос в **Готово** возвращает задачу в очередь и освобождает claims; **Готово → В работе** начинает ручную работу. Перенос в **Проверку** или **Выполнено** открывает панель явного решения (агентское ревью или ручная приёмка). Перенос результата в **Приёмку** отправляет его на проверку человеку. Человеческие действия выполняются отдельным session-only endpoint, сохраняют комментарии и историю, сериализуются с агентскими решениями. Сервер проверяет ограничения независимо от UI.
+
+## Проверки и разработка
+
+```bash
+uv run pytest -q
+npm run build --prefix web
+uv run ruff check src/agent_kanban
+```
+
+Тесты используют отдельную временную PostgreSQL database на localhost:5436, после suite база удаляется. HTTP MCP tests проверяют настоящую bearer authorization, полный workflow с повторными возвратами, запрет обходов и concurrent claims.
+
+Для разработки без Docker нужны Python 3.11+, uv, Node 22.12+ и PostgreSQL 16+. Создайте пользователя/БД и укажите подключение в `.env`. Для тестов нужна доступная отдельная PostgreSQL-инсталляция на `localhost:5436` с пользователем/паролем `kanban` и правом создания БД; рабочая база приложения не используется.
+
+Чистая установка:
+
 ```bash
 uv sync --extra dev
-uv run kanban serve
+cp .env.example .env             # задайте DATABASE_URL и случайный SESSION_SECRET
+cd web && npm ci && npm run build && cd ..
+uv run kanban migrate
+uv run kanban serve --host 127.0.0.1
 ```
 
-### 3. Frontend (separate terminal)
-```bash
-cd web
-pnpm install
-pnpm dev   # http://localhost:5173, proxies to :7331
-```
+Docker-запуск описан в начале README. Вспомогательные `scripts/start-local.sh` и `stop-local.sh` предназначены для существующей среды разработки с `.tools` и `.runtime`; они не устанавливают зависимости на новом компьютере.
 
-### 4. Point an agent at the board
-Add to your agent's MCP config:
+## Основа и лицензия
 
-**Codex** (`~/.codex/config.toml`):
-```toml
-[mcp_servers.kanban]
-url = "http://localhost:7331/mcp"
-```
+Сохранена архитектура Agent Kanban: FastAPI + PostgreSQL + React + существующий Streamable HTTP MCP, bearer tokens и WebSocket. Внутренние package/module names, entities, прежние migrations и env identifiers сохраняются.
 
-**Hermes** (`~/.hermes/config.yaml`):
-```yaml
-mcp_servers:
-  kanban:
-    url: http://localhost:7331/mcp
-```
+[MIT LICENSE](LICENSE) © Sergey Dmitriev (автор Agent Kanban). Форк AI Tasker: [remzone/ai-tasker](https://github.com/remzone/ai-tasker). Исходные README и credits находятся в [docs/upstream](docs/upstream/README.md). AI Tasker остаётся open-source.
 
-Then instruct your agent: "Check the kanban board for tasks via get_next_task."
+Исторический журнал разработки: [STATUS.md](STATUS.md); инструкции текущего запуска находятся в этом README.
 
-## Agent workflow
+### Ограничения и шаблоны задач
 
-1. Create a task in the UI. It starts in `todo`.
-2. Drag it to the `READY` column. It's now available to agents via `get_next_task`.
-3. Instruct your agent (e.g. Codex, Hermes) to check the board:
-   - Call `get_next_task` to discover work.
-   - Call `claim_task` to take it.
-   - Call `post_progress` to report what it's doing.
-   - Call `request_review` when ready for your review, or `complete_task` when done.
-4. Watch progress events stream into the card detail view in real time.
-5. Add comments to give the agent follow-up instructions; the agent reads them via `get_comments`.
+На доске откройте **Настройки проекта** и заполните **Общие ограничения и инструкции проекта**: разрешённые директории, файлы только для чтения, необходимые AGENTS.md, разрешённые runtime-действия и команды проверок. Правила применяются ко всем задачам проекта, включая ревью. Можно добавить общий шаблон или шаблон Odyssey; они добавляются к существующему тексту. Замените поля в квадратных скобках и проверьте пути перед сохранением.
 
-Agents must pass their identifier as the `agent` argument to mutation tools
-(`claim_task`, `post_progress`, `complete_task`, `request_review`, `post_comment`,
-`post_artifact`, `set_task_branch`, `set_task_pr`). The board authorizes mutations
-by checking `claimed_by == agent`.
+При создании или изменении задачи заполните **Дополнительные ограничения и инструкции агента**. Кнопка **Добавить шаблон задачи** добавляет структуру постановки (тип, место ошибки, текущее и ожидаемое поведение, данные воспроизведения); критерии приёмки остаются отдельным полем. Унаследованные правила проекта доступны прямо в форме.
 
-## Coding tasks (git/PR)
+В карточке кнопка **Полный промпт для агента** собирает актуальные правила проекта и задачи, описание, критерии, комментарии, вложения и результат для ревью. Промпт можно скопировать в разговор с агентом. MCP `get_task_context` возвращает те же правила в `project_agent_instructions`, `agent_instructions`, `effective_agent_instructions` и полный текст в `agent_prompt`. Исполнитель и ревьюер должны читать контекст перед работой. Изменять правила через API разрешено только человеческой сессии.
 
-For tasks that touch a git repo, set `repo_path` and `base_branch` when creating
-the task. The board does NOT create branches or PRs — your agent does that with
-its own git tools. The board records what the agent reports and renders a review
-diff.
-
-Agent workflow for a coding task:
-1. `claim_task` — receives `repo_path` and (if set) `base_branch`.
-2. Create a branch in `repo_path` with the agent's git tool.
-3. `set_task_branch(task_id, agent, branch)` — record it so the UI shows it and
-   the diff can be collected.
-4. Commit work on that branch.
-5. `request_review(task_id, agent, summary)` — the board runs
-   `git -C <repo_path> diff <base>...<branch>` once and stores the result as a
-   diff event visible in the card's progress feed.
-6. Open a PR with the agent's GitHub tool, then
-   `set_task_pr(task_id, agent, pr_url, "open")`.
-7. When merged, `set_task_pr(task_id, agent, pr_url, "merged")` then
-   `complete_task`.
-
-If `repo_path`, `base_branch` (or the project's `default_branch`), or `branch` is
-missing, diff collection is skipped silently. If `git diff` fails, an error event
-is recorded instead, but the review request itself still succeeds.
-
-## Authentication
-
-The board requires authentication. Two kinds of principals:
-
-- **Users** (humans): log in with username + password via the web UI. Sessions are signed cookies.
-- **Tokens** (agents): opaque bearer tokens, managed in the Admin panel. Each token is bound to an `agent_name`.
-
-### First run
-
-On first startup with an empty database, the UI shows a setup screen: choose an admin username + password (8+ chars) and submit. Alternatively, set `AGENT_KANBAN_BOOTSTRAP_ADMIN_PASSWORD` to create the admin headlessly (for automation). After setup, log in and go to Admin → Tokens to mint tokens for your agents.
-
-### Pointing an agent at the board
-
-Agents authenticate via a bearer token. In your agent's MCP config:
-
-**Codex** (`~/.codex/config.toml`):
-```toml
-[mcp_servers.kanban]
-url = "http://your-host:7331/mcp"
-# Codex reads headers from config in newer versions; otherwise set the auth via env.
-headers = { Authorization = "Bearer <your-token>" }
-```
-
-**Hermes** (`~/.hermes/config.yaml`):
-```yaml
-mcp_servers:
-  kanban:
-    url: http://your-host:7331/mcp
-    headers:
-      Authorization: Bearer <your-token>
-```
-
-The token's `agent_name` MUST match the `agent` argument you pass to MCP tools. A token minted with `agent_name=codex` can call `claim_task(agent="codex")` but NOT `claim_task(agent="hermes")`.
-
-### Production env vars
-
-- `SESSION_SECRET` — signing key for session cookies. REQUIRED in production; set a long random string.
-- `PUBLIC_URL` — the public base URL (e.g. `https://kanban.example.com`). Controls cookie `Secure` flag.
-- `AGENT_KANBAN_BOOTSTRAP_ADMIN_PASSWORD` — first-run admin password (optional; if unset, the UI setup screen creates the first admin).
-
-## Docker
-```bash
-docker compose up -d
-```
-Runs the app on :7331 with Postgres in an internal-only container (not exposed to
-the host). The app connects to it over the compose network as `postgres:5432`.
-For local dev against a host-visible Postgres, see the standalone container note
-in "Database" above (port 5436).
-
-## Contributing
-
-Contributions are welcome. The design spec and phased implementation plans live
-under `docs/superpowers/` — they're a good map of the architecture and intent.
-
-```bash
-# clone, then:
-uv sync --extra dev          # backend deps + test tooling
-cd web && pnpm install       # frontend deps
-uv run pytest -q             # 112+ tests
-cd web && pnpm build         # type-check + bundle
-```
-
-Please open an issue first for non-trivial changes, so we can align on scope.
-
-## Credits
-
-The UI is built on a design system inspired by
-[Sergey Dmitriev's brand book](https://brandbook.graywrk.ru) — amber as the
-single UI accent, dark-first, with semantic-only status colors.
-
-## License
-
-[MIT](LICENSE) © Sergey Dmitriev
-
+Текстовые ограничения — инструкции агенту. Фактические права на запись и sandbox задаются в окружении Codex; доска не ограничивает файловую систему внешнего агента. При конфликте инструкций агент должен остановиться и уточнить у человека, прежде чем расширять область изменений.

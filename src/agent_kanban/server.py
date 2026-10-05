@@ -142,7 +142,7 @@ def create_app() -> FastAPI:
     # Mount MCP HTTP transport at /mcp. With FastMCP's streamable_http_path="/",
     # the canonical endpoint is /mcp/. The MCPAuthMiddleware wraps the inner
     # app so every /mcp request resolves a Principal from the bearer header
-    # into a ContextVar that the tool verifiers read. The
+    # into its HTTP scope, read via the per-message SDK request context. The
     # _MCPTrailingSlashMiddleware (registered as app middleware) rewrites a
     # bare POST /mcp → /mcp/ so MCP clients that omit the slash (ZCode, Codex,
     # Hermes) don't hit 405 Method Not Allowed.

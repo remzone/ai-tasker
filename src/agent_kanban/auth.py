@@ -1,10 +1,15 @@
 """Authentication: password hashing, token generation/verification, Principal resolution."""
+import base64
+import hmac
 import secrets
 import time
 from datetime import UTC, datetime
 from typing import Literal, Optional
 
 import bcrypt
+from cryptography.fernet import Fernet
+
+from agent_kanban.config import get_settings
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +37,20 @@ def hash_token(plain: str) -> str:
 
 def verify_token(plain: str, hashed: str) -> bool:
     return verify_password(plain, hashed)
+
+
+def _token_cipher() -> Fernet:
+    # Separate encryption key from cookie signing using domain-separated HMAC.
+    key = hmac.digest(get_settings().session_secret.encode(), b"agent-kanban/token-vault/v1", "sha256")
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def encrypt_token(plain: str) -> str:
+    return _token_cipher().encrypt(plain.encode()).decode()
+
+
+def decrypt_token(ciphertext: str) -> str:
+    return _token_cipher().decrypt(ciphertext.encode()).decode()
 
 
 def generate_token() -> str:

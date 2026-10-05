@@ -4,6 +4,7 @@ import { useT, localeBcp47 } from "../i18n.tsx";
 
 interface TokenRow {
   id: number;
+  can_reveal: boolean;
   agent_name: string;
   description: string | null;
   created_at: string;
@@ -22,7 +23,10 @@ export function Admin({ onBack }: { onBack: () => void }) {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [newTokenAgent, setNewTokenAgent] = useState("");
   const [newTokenDesc, setNewTokenDesc] = useState("");
-  const [mintedToken, setMintedToken] = useState<string | null>(null);
+  const [mintedToken, setMintedToken] = useState<{ id: number; token: string; agent_name: string } | null>(null);
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [checkResult, setCheckResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [newUser, setNewUser] = useState({ username: "", password: "", is_admin: false });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -41,10 +45,12 @@ export function Admin({ onBack }: { onBack: () => void }) {
     setActionError(null);
     try {
       const tk = await api.createToken(newTokenAgent, newTokenDesc || undefined);
-      setMintedToken(tk.token);
+      setMintedToken(tk);
+      setTokenVisible(false);
+      setCheckResult(null);
       setNewTokenAgent("");
       setNewTokenDesc("");
-      refresh();
+      await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("admin.error.mint"));
     }
@@ -53,18 +59,78 @@ export function Admin({ onBack }: { onBack: () => void }) {
     setActionError(null);
     try {
       await api.deleteToken(id);
-      refresh();
+      if (mintedToken?.id === id) setMintedToken(null);
+      await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("admin.error.revoke"));
     }
   }
+  async function openToken(tk: TokenRow, regenerate = false) {
+    if (regenerate && !window.confirm(t("admin.replaceConfirm"))) return;
+    setActionError(null);
+    setTokenBusy(true);
+    setCheckResult(null);
+    try {
+      const value = regenerate ? await api.regenerateToken(tk.id) : await api.revealToken(tk.id);
+      setMintedToken({ id: tk.id, ...value });
+      setTokenVisible(false);
+      await refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : t("admin.error.mint"));
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+  async function copyText(text: string) {
+    try {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const field = document.createElement("textarea");
+        field.value = text;
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.appendChild(field);
+        try {
+          field.select();
+          if (!document.execCommand("copy")) throw new Error(t("admin.copyError"));
+        } finally {
+          field.remove();
+        }
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setActionError(t("admin.copyError"));
+    }
+  }
+  async function checkToken() {
+    if (!mintedToken) return;
+    setTokenBusy(true);
+    setCheckResult(null);
+    try {
+      await api.checkMcpToken(mintedToken.token);
+      setCheckResult(t("admin.checkSuccess"));
+      await refresh();
+    } catch (e) {
+      setCheckResult(e instanceof Error ? e.message : t("admin.checkFailed"));
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+  const mcpConfig = mintedToken ? `[mcp_servers.tasker]
+url = ${JSON.stringify(`${location.origin}/mcp`)}
+
+[mcp_servers.tasker.http_headers]
+Authorization = ${JSON.stringify(`Bearer ${mintedToken.token}`)}` : "";
+
   async function addUser() {
     if (!newUser.username || !newUser.password) return;
     setActionError(null);
     try {
       await api.createUser(newUser.username, newUser.password, newUser.is_admin);
       setNewUser({ username: "", password: "", is_admin: false });
-      refresh();
+      await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("admin.error.addUser"));
     }
@@ -74,7 +140,7 @@ export function Admin({ onBack }: { onBack: () => void }) {
     try {
       await api.deleteUser(id);
       if (editingUserId === id) setEditingUserId(null);
-      refresh();
+      await refresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : t("admin.error.removeUser"));
     }
@@ -94,45 +160,32 @@ export function Admin({ onBack }: { onBack: () => void }) {
         </div>
       )}
 
+      <section className="panel">
+        <h3>{t("admin.mcpTitle")}</h3>
+        <p className="muted">{t("admin.mcpHint")}</p>
+        <p className="muted">{t("admin.mcpSteps")}</p>
+      </section>
       {/* Tokens */}
       <section style={{ marginBottom: 32 }}>
         <h3 style={{ marginBottom: 12 }}>{t("admin.tokensHeading")}</h3>
 
         {mintedToken && (
-          <div
-            style={{
-              background: "var(--accent-soft)",
-              border: "1px solid var(--accent)",
-              padding: 14,
-              borderRadius: "var(--radius)",
-              marginBottom: 14,
-            }}
-          >
-            <div className="eyebrow" style={{ color: "var(--accent-pressed)", marginBottom: 6 }}>
-              {t("admin.banner")}
+          <div className="panel" style={{ borderColor: "var(--accent)", marginBottom: 14 }}>
+            <h3>{t("admin.tokenFor")} <span className="mono">{mintedToken.agent_name}</span></h3>
+            <input className="input mono" aria-label={t("admin.agentToken")} type={tokenVisible ? "text" : "password"}
+              value={mintedToken.token} readOnly autoComplete="off" spellCheck={false} style={{ width: "100%" }} />
+            <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-sm" onClick={() => setTokenVisible(!tokenVisible)}>{t(tokenVisible ? "admin.hideToken" : "admin.showToken")}</button>
+              <button className="btn btn-sm" onClick={() => copyText(mintedToken.token)}>{t("admin.copyToken")}</button>
+              <button className="btn btn-sm" onClick={() => copyText(`Bearer ${mintedToken.token}`)}>{t("admin.copyHeader")}</button>
+              <button className="btn btn-primary btn-sm" onClick={() => copyText(mcpConfig)}>{t("admin.copyConfig")}</button>
+              <button className="btn btn-sm" disabled={tokenBusy} onClick={checkToken}>{t(tokenBusy ? "admin.checking" : "admin.checkMcp")}</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setMintedToken(null); setCheckResult(null); }}>{t("admin.closeToken")}</button>
             </div>
-            <div className="mono" style={{ fontSize: "var(--text-small)", wordBreak: "break-all", color: "var(--text)" }}>
-              {mintedToken}
-            </div>
-            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-              <button
-                className="btn btn-sm"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(mintedToken);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  } catch {
-                    /* clipboard may be blocked */
-                  }
-                }}
-              >
-                {copied ? t("common.copied") : t("common.copy")}
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setMintedToken(null)}>
-                {t("common.dismiss")}
-              </button>
-            </div>
+            {copied && <p role="status">{t("common.copied")}</p>}
+            {checkResult && <p role="status" style={{ overflowWrap: "anywhere" }}>{checkResult}</p>}
+            <p className="muted">{t("admin.configHint")}</p>
+            <p className="muted">{t("admin.agentArgument")} <code>{JSON.stringify(mintedToken.agent_name)}</code></p>
           </div>
         )}
 
@@ -156,7 +209,7 @@ export function Admin({ onBack }: { onBack: () => void }) {
           </button>
         </div>
 
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-small)" }}>
             <thead>
               <tr style={{ background: "var(--elevated)" }}>
@@ -188,9 +241,13 @@ export function Admin({ onBack }: { onBack: () => void }) {
                     )}
                   </Td>
                   <Td align="right">
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    {tk.can_reveal && <button className="btn btn-sm" disabled={tokenBusy} onClick={() => openToken(tk)}>{t("admin.openToken")}</button>}
+                    <button className="btn btn-sm" disabled={tokenBusy} onClick={() => openToken(tk, true)}>{t(tk.can_reveal ? "admin.replaceToken" : "admin.generateToken")}</button>
                     <button className="btn btn-danger btn-sm" onClick={() => revoke(tk.id)}>
                       {t("admin.revoke")}
                     </button>
+                    </div>
                   </Td>
                 </tr>
               ))}
@@ -231,7 +288,7 @@ export function Admin({ onBack }: { onBack: () => void }) {
           </button>
         </div>
 
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-small)" }}>
             <thead>
               <tr style={{ background: "var(--elevated)" }}>

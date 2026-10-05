@@ -43,7 +43,7 @@ async def test_list_progress_has_z_suffix(authed_client):
     )
     r = await authed_client.get(f"/api/tasks/{task_id}/progress")
     assert r.status_code == 200
-    events = r.json()
+    events = [e for e in r.json() if e["kind"] == "text"]
     assert len(events) == 1
     ts = events[0]["created_at"]
     assert ts.endswith("Z"), f"expected UTC 'Z' suffix, got {ts!r}"

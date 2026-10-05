@@ -12,6 +12,7 @@ class TaskStatus(str, Enum):
     READY = "ready"
     IN_PROGRESS = "in_progress"
     REVIEW = "review"
+    ACCEPTANCE = "acceptance"
     DONE = "done"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
@@ -28,6 +29,7 @@ class ProgressKind(str, Enum):
 class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
+    agent_instructions: str = ""
     repo_path: Optional[str] = None
     default_branch: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
@@ -38,6 +40,11 @@ class Task(SQLModel, table=True):
     project_id: Optional[int] = Field(default=None, foreign_key="project.id")
     title: str
     description: str = ""
+    agent_instructions: str = ""
+    acceptance_criteria: str = ""
+    work_summary: str = ""
+    review_assigned_to: Optional[str] = None
+    reviewer: Optional[str] = None
     status: TaskStatus = Field(
         default=TaskStatus.TODO,
         sa_column=Column(
@@ -114,6 +121,7 @@ class User(SQLModel, table=True):
 class Token(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     agent_name: str = Field(index=True)
+    token_ciphertext: Optional[str] = None  # admin-only recoverable encrypted token
     token_hash: str  # bcrypt hash of the opaque token
     token_prefix: str = Field(default="", index=True)  # first 8 chars of plaintext, for fast lookup
     description: Optional[str] = None

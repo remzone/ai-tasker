@@ -202,14 +202,14 @@ async def test_complete_task_via_mcp(session: AsyncSession):
     # (the MCP tool committed through its own session/connection).
     async with _fresh_session_factory()() as s:
         t2 = await get_task(s, t.id)
-        assert t2.status == TaskStatus.DONE
+        assert t2.status == TaskStatus.REVIEW
 
 
 @pytest.mark.asyncio
 async def test_request_review_via_mcp(session: AsyncSession):
     t = await create_task(session, TaskCreate(title="x", status=TaskStatus.READY))
     await mcp.call_tool("claim_task", {"task_id": t.id, "agent": "codex"})
-    await mcp.call_tool("request_review", {"task_id": t.id, "agent": "codex"})
+    await mcp.call_tool("request_review", {"task_id": t.id, "agent": "codex", "summary": "Implemented and tested"})
     async with _fresh_session_factory()() as s:
         t2 = await get_task(s, t.id)
         assert t2.status == TaskStatus.REVIEW
@@ -284,7 +284,8 @@ async def test_tools_list_core_tools_registered():
         "set_task_pr",
     }
     assert expected.issubset(names), f"missing: {expected - names}"
-    assert len(names) == 11, f"expected 11 tools, got {len(names)}: {names}"
+    assert {"list_projects", "get_task_context", "get_next_review", "claim_review", "submit_review"}.issubset(names)
+    assert len(names) == 16
 
 
 @pytest.mark.asyncio

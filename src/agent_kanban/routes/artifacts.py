@@ -8,9 +8,12 @@ were inserted via raw SQL or config drifted.
 """
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
+from agent_kanban.services import artifact_root
+from agent_kanban.events import event_bus
 
 from agent_kanban.auth import Principal, get_current_principal
 from agent_kanban.db import get_session
@@ -30,7 +33,7 @@ def _is_path_allowed(path: str, allowed_roots: list[str]) -> bool:
     return False
 
 
-@router.get("/{artifact_id}/content")
+@router.api_route("/{artifact_id}/content", methods=["GET", "HEAD"])
 async def get_artifact_content(
     artifact_id: int,
     session: AsyncSession = Depends(get_session),
@@ -47,6 +50,7 @@ async def get_artifact_content(
 
     allowed_roots = [
         str(Path.home() / ".agent-kanban" / "artifacts" / str(task.id)),
+        str(artifact_root(task.id)),
     ]
     if task.repo_path:
         allowed_roots.append(task.repo_path)
@@ -58,4 +62,44 @@ async def get_artifact_content(
     if not p.is_file():
         raise HTTPException(404, "artifact file not found on disk")
 
-    return FileResponse(str(p))
+    return FileResponse(str(p), filename=p.name, headers={"X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/task/{task_id}")
+async def list_attachments(task_id: int, session: AsyncSession = Depends(get_session),
+                           principal: Principal = Depends(get_current_principal)):
+    return list((await session.execute(select(Artifact).where(Artifact.task_id == task_id).order_by(Artifact.id))).scalars())
+
+
+@router.post("/task/{task_id}/upload", status_code=201)
+async def upload_attachment(task_id: int, file: UploadFile = File(...),
+                            session: AsyncSession = Depends(get_session),
+                            principal: Principal = Depends(get_current_principal)):
+    if principal.is_token:
+        raise HTTPException(403, "human session required")
+    if await session.get(Task, task_id) is None:
+        raise HTTPException(404, "task not found")
+    import uuid
+    root = artifact_root(task_id)
+    root.mkdir(parents=True, exist_ok=True)
+    name = Path(file.filename or "attachment").name
+    path = root / f"{uuid.uuid4().hex}-{name}"
+    size = 0
+    try:
+        with path.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > 20 * 1024 * 1024:
+                    raise HTTPException(413, "attachment exceeds 20 MB")
+                out.write(chunk)
+        art = Artifact(task_id=task_id, path=str(path), kind="screenshot" if (file.content_type or "").startswith("image/") else "file", description=name)
+        session.add(art)
+        await session.commit()
+        await session.refresh(art)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+    await event_bus.publish(f"task:{task_id}", {"type": "attachment", "artifact_id": art.id})
+    return art

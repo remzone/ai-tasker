@@ -18,7 +18,7 @@ export function TaskCard({
   lastProgressAt?: string;
 }) {
   const { t } = useT();
-  const isLive = lastProgressAt
+  const isLive = task.status === "in_progress" && lastProgressAt
     ? Date.now() - new Date(lastProgressAt).getTime() < LIVE_WINDOW_MS
     : false;
   return (
@@ -47,13 +47,16 @@ export function TaskCard({
           #{task.id}
         </span>
         <span
-          className="ellipsis"
           style={{ fontWeight: 600, fontSize: "var(--text-body)", flex: 1, minWidth: 0 }}
         >
           {task.title}
         </span>
       </div>
 
+      {task.description && <p className="task-excerpt">{task.description}</p>}
+      {!task.reviewer && task.review_assigned_to && <p className="muted" style={{ fontSize: 12 }}>{t("workflow.assignedReview", { name: task.review_assigned_to })}</p>}
+      {task.reviewer && <p className="muted" style={{ fontSize: 12 }}>{t("card.reviewer", { name: task.reviewer })}</p>}
+      {task.status === "in_progress" && !task.claimed_by && <span className="badge badge-warning">{t("card.returnWaiting")}</span>}
       {task.tags.length > 0 && (
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
           {task.tags.map((tg) => (

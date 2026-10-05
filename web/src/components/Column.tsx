@@ -18,6 +18,8 @@ export function Column({ status, tasks, lastProgress, onDrop, onOpen }: Props) {
   const meta = STATUS_META[status];
   return (
     <div
+      className="kanban-column"
+      data-status={status}
       onDragOver={(e) => {
         e.preventDefault();
         setOver(true);
@@ -27,11 +29,11 @@ export function Column({ status, tasks, lastProgress, onDrop, onOpen }: Props) {
         e.preventDefault();
         setOver(false);
         const taskId = Number(e.dataTransfer.getData("text/plain"));
-        onDrop(taskId, status);
+        if (Number.isInteger(taskId) && taskId > 0) onDrop(taskId, status);
       }}
       style={{
         flex: "1 1 0",
-        minWidth: 230,
+        minWidth: 190,
         maxWidth: 320,
         background: "var(--surface)",
         border: `1px solid ${over ? "var(--accent)" : "var(--border)"}`,
@@ -64,8 +66,12 @@ export function Column({ status, tasks, lastProgress, onDrop, onOpen }: Props) {
           <div
             key={tk.id}
             draggable
-            onDragStart={(e) => e.dataTransfer.setData("text/plain", String(tk.id))}
+            onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(tk.id)); }}
             onClick={() => onOpen(tk.id)}
+            role="button"
+            tabIndex={0}
+            aria-label={`#${tk.id} ${tk.title}`}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(tk.id); } }}
             style={{ cursor: "pointer" }}
           >
             <TaskCard task={tk} lastProgressAt={lastProgress[tk.id]} />

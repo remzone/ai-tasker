@@ -114,7 +114,7 @@ async def test_full_phase1_journey(authed_client, monkeypatch):
     # 5. UI sees the progress event.
     r = await authed_client.get(f"/api/tasks/{task_id}/progress")
     assert r.status_code == 200
-    events = r.json()
+    events = [e for e in r.json() if e["kind"] == "text"]
     assert len(events) == 1
     assert events[0]["agent"] == "hermes"
     assert events[0]["kind"] == "text"
@@ -124,7 +124,12 @@ async def test_full_phase1_journey(authed_client, monkeypatch):
         "complete_task", {"task_id": task_id, "agent": "hermes", "summary": "done"}
     )
 
-    # 7. Board reflects done.
+    # 7. AI reviewer approves; only the human can mark Done.
+    await mcp.call_tool("claim_review", {"task_id": task_id, "agent": "hermes"})
+    await mcp.call_tool("submit_review", {"task_id": task_id, "agent": "hermes", "decision": "APPROVE", "comment": "Verified the README"})
+    r = await authed_client.post(f"/api/tasks/{task_id}/acceptance", json={"approve": True})
+    assert r.status_code == 200
+    # 8. Board reflects done.
     r = await authed_client.get(f"/api/tasks/{task_id}")
     assert r.status_code == 200
     assert r.json()["status"] == "done"

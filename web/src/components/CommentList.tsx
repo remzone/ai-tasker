@@ -4,12 +4,11 @@ import { api } from "../api";
 import type { Comment, TaskStatus } from "../types";
 import { useT, localeBcp47 } from "../i18n.tsx";
 
-type ReengageStatus = "in_progress" | "ready";
 
 export function CommentList({
   taskId,
   comments,
-  taskStatus,
+
   onPosted,
 }: {
   taskId: number;
@@ -22,15 +21,13 @@ export function CommentList({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const showSelector = taskStatus === "review";
-  const [reengage, setReengage] = useState<ReengageStatus>("in_progress");
 
   async function send() {
     if (!text.trim() || pending) return;
     setPending(true);
     setError(null);
     try {
-      await api.postComment(taskId, text, "user", showSelector ? reengage : undefined);
+      await api.postComment(taskId, text);
       setText("");
       onPosted();
     } catch (e) {
@@ -106,22 +103,8 @@ export function CommentList({
           placeholder={t("comment.inputPlaceholder")}
           disabled={pending}
         />
-        {showSelector && (
-          <select
-            className="input"
-            value={reengage}
-            onChange={(e) => setReengage(e.target.value as ReengageStatus)}
-            disabled={pending}
-            title={t("comment.statusAfter")}
-            style={{ width: "auto", flex: "0 0 auto" }}
-          >
-            <option value="in_progress">{t("comment.toInProgress")}</option>
-            <option value="ready">{t("comment.toReady")}</option>
-          </select>
-        )}
-        <button className="btn btn-primary" onClick={send} disabled={pending || !text.trim()}>
-          {pending ? t("comment.sending") : t("common.send")}
-        </button>
+
+        <button className="btn btn-primary" onClick={send} disabled={pending || !text.trim()}>{t("common.send")}</button>
       </div>
     </div>
   );

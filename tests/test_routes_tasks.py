@@ -55,3 +55,22 @@ async def test_list_tasks_filter_by_status(authed_client):
     r = await authed_client.get("/api/tasks?status=ready")
     assert r.status_code == 200
     assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_task_project_context_and_utc_comments(authed_client):
+    first = (await authed_client.post("/api/projects", json={"name": "One", "repo_path": "/work/one", "default_branch": "main"})).json()
+    second = (await authed_client.post("/api/projects", json={"name": "Two", "repo_path": "/work/two", "default_branch": "develop"})).json()
+    for project in (first, second):
+        response = await authed_client.post("/api/tasks", json={"title": project["name"], "project_id": project["id"], "status": "ready", "acceptance_criteria": "Verified"})
+        assert response.status_code == 201
+        assert response.json()["repo_path"] == project["repo_path"]
+        assert response.json()["base_branch"] == project["default_branch"]
+    from agent_kanban.mcp_server import mcp
+    from tests.test_mcp_server import _to_dict
+    result = _to_dict(await mcp.call_tool("get_next_task", {"project_id": second["id"]}))
+    assert result["project_id"] == second["id"]
+    listed = _to_dict(await mcp.call_tool("list_tasks", {"project_id": second["id"]}))
+    assert len(listed) == 1 and listed[0]["id"] == result["id"]
+    comment = await authed_client.post(f'/api/tasks/{result["id"]}/comments', json={"author": "user", "content": "Feedback"})
+    assert comment.json()["created_at"].endswith("Z")

@@ -14,6 +14,7 @@ export const STATUS_META: Record<
   ready: { labelKey: "status.ready", badge: "info" },
   in_progress: { labelKey: "status.in_progress", badge: "warning" },
   review: { labelKey: "status.review", badge: "warning" },
+  acceptance: { labelKey: "status.acceptance", badge: "info" },
   done: { labelKey: "status.done", badge: "success" },
   blocked: { labelKey: "status.blocked", badge: "error" },
   cancelled: { labelKey: "status.cancelled", badge: "neutral" },

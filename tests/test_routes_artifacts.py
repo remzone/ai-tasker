@@ -59,3 +59,33 @@ async def test_artifact_content_403_for_path_outside_sandbox(authed_client, sess
 
     r = await authed_client.get(f"/api/artifacts/{art_id}/content")
     assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_upload_size_limit_and_cleanup(authed_client, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_KANBAN_ARTIFACT_DIR", str(tmp_path))
+    task = (await authed_client.post("/api/tasks", json={"title": "Upload limit"})).json()
+    response = await authed_client.post(
+        f'/api/artifacts/task/{task["id"]}/upload',
+        files={"file": ("large.txt", b"x" * (20 * 1024 * 1024 + 1), "text/plain")},
+    )
+    assert response.status_code == 413
+    assert list((tmp_path / str(task["id"])).iterdir()) == []
+    assert (await authed_client.get(f'/api/artifacts/task/{task["id"]}')).json() == []
+
+
+@pytest.mark.asyncio
+async def test_uploaded_screenshot_and_head(authed_client, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_KANBAN_ARTIFACT_DIR", str(tmp_path))
+    task = (await authed_client.post("/api/tasks", json={"title": "Screenshot"})).json()
+    response = await authed_client.post(
+        f'/api/artifacts/task/{task["id"]}/upload',
+        files={"file": ("../../screenshot.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+    )
+    assert response.status_code == 201
+    artifact = response.json()
+    assert artifact["description"] == "screenshot.png" and artifact["kind"] == "screenshot"
+    assert (tmp_path / str(task["id"])) in __import__("pathlib").Path(artifact["path"]).parents
+    head = await authed_client.head(f'/api/artifacts/{artifact["id"]}/content')
+    assert head.status_code == 200 and head.headers["content-length"] == "8"
+    assert head.headers["x-content-type-options"] == "nosniff"

@@ -1,13 +1,16 @@
 """Auth REST routes: setup-status, login, logout, me, tokens CRUD, users CRUD."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from cryptography.fernet import InvalidToken
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import func, select
 
 from agent_kanban.auth import (
     Principal,
+    decrypt_token,
+    encrypt_token,
     generate_token,
     get_current_principal,
     hash_password,
@@ -22,7 +25,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 
 def _require_admin(p: Principal) -> None:
-    if not p.is_admin:
+    if not p.is_user or not p.is_admin:
         raise HTTPException(403, "admin required")
 
 
@@ -122,6 +125,7 @@ async def list_tokens(
     return [
         {
             "id": t.id,
+            "can_reveal": bool(t.token_ciphertext),
             "agent_name": t.agent_name,
             "description": t.description,
             "created_at": t.created_at.isoformat() + "Z",
@@ -134,13 +138,18 @@ async def list_tokens(
 @router.post("/tokens", status_code=201)
 async def create_token(
     body: TokenCreate,
+    response: Response,
     principal: Principal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ):
     _require_admin(principal)
+    response.headers["Cache-Control"] = "no-store"
+    if not body.agent_name.strip():
+        raise HTTPException(400, "agent_name must not be empty")
     plain = generate_token()
     tok = Token(
-        agent_name=body.agent_name,
+        agent_name=body.agent_name.strip(),
+        token_ciphertext=encrypt_token(plain),
         token_hash=hash_token(plain),
         token_prefix=plain[:8],
         description=body.description,
@@ -153,8 +162,50 @@ async def create_token(
         "id": tok.id,
         "agent_name": tok.agent_name,
         "description": tok.description,
-        "token": plain,  # plaintext, shown once
+        "token": plain,  # returned only by explicit admin actions
     }
+
+
+@router.post("/tokens/{token_id}/reveal")
+async def reveal_token(
+    token_id: int,
+    response: Response,
+    principal: Principal = Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    _require_admin(principal)
+    response.headers["Cache-Control"] = "no-store"
+    tok = await session.get(Token, token_id)
+    if tok is None:
+        raise HTTPException(404, "token not found")
+    if not tok.token_ciphertext:
+        raise HTTPException(409, "Старый токен сохранён только как хеш. Сгенерируйте замену.")
+    try:
+        plain = decrypt_token(tok.token_ciphertext)
+    except InvalidToken:
+        raise HTTPException(409, "Ключ хранения изменился. Сгенерируйте замену токена.") from None
+    return {"token": plain, "agent_name": tok.agent_name}
+
+
+@router.post("/tokens/{token_id}/regenerate")
+async def regenerate_token(
+    token_id: int,
+    response: Response,
+    principal: Principal = Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+):
+    _require_admin(principal)
+    response.headers["Cache-Control"] = "no-store"
+    tok = (await session.execute(select(Token).where(Token.id == token_id).with_for_update())).scalar_one_or_none()
+    if tok is None:
+        raise HTTPException(404, "token not found")
+    plain = generate_token()
+    tok.token_hash = hash_token(plain)
+    tok.token_prefix = plain[:8]
+    tok.token_ciphertext = encrypt_token(plain)
+    tok.last_used_at = None
+    await session.commit()
+    return {"token": plain, "agent_name": tok.agent_name}
 
 
 @router.delete("/tokens/{token_id}")

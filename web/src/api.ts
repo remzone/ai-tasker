@@ -1,4 +1,4 @@
-import type { Comment, ProgressEvent, Task, TaskStatus } from "./types";
+import type { Comment, ProgressEvent, Task, TaskStatus, Project, Attachment, TaskContext } from "./types";
 
 const BASE = "/api";
 
@@ -7,21 +7,33 @@ async function j<T>(res: Response): Promise<T> {
     window.dispatchEvent(new CustomEvent("kanban:unauthorized"));
     throw new Error("unauthorized");
   }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(typeof body?.detail === "string" ? body.detail : `${res.status} ${res.statusText}`);
+  }
   return res.json() as Promise<T>;
 }
 
 export const api = {
-  async listTasks(status?: TaskStatus): Promise<Task[]> {
-    const q = status ? `?status=${status}` : "";
+  async listTasks(status?: TaskStatus, projectId?: number): Promise<Task[]> {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (projectId) params.set("project_id", String(projectId));
+    const q = `?${params}`;
     return j(await fetch(`${BASE}/tasks${q}`, { credentials: "include" }));
   },
   async getTask(id: number): Promise<Task> {
     return j(await fetch(`${BASE}/tasks/${id}`, { credentials: "include" }));
   },
+  async getTaskContext(id: number): Promise<TaskContext> {
+    return j(await fetch(`${BASE}/tasks/${id}/context`, { credentials: "include" }));
+  },
   async createTask(data: {
     title: string;
     description?: string;
+    acceptance_criteria?: string;
+    agent_instructions?: string;
+    project_id?: number;
     tags?: string[];
     status?: TaskStatus;
     repo_path?: string;
@@ -39,7 +51,7 @@ export const api = {
   },
   async updateTask(
     id: number,
-    patch: Partial<Pick<Task, "title" | "description" | "tags" | "status" | "sort_order">> & {
+    patch: Partial<Pick<Task, "title" | "description" | "acceptance_criteria" | "agent_instructions" | "repo_path" | "base_branch" | "tags" | "status" | "sort_order">> & {
       assigned_to?: string | null;
     }
   ): Promise<Task> {
@@ -51,6 +63,12 @@ export const api = {
         body: JSON.stringify(patch),
       })
     );
+  },
+  async workflow(id: number, action: "ready" | "start" | "review" | "human_review" | "accept" | "return", comment = "", reviewer?: string): Promise<Task> {
+    return j(await fetch(`${BASE}/tasks/${id}/workflow`, {
+      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, comment, reviewer }),
+    }));
   },
   async listProgress(taskId: number): Promise<ProgressEvent[]> {
     return j(await fetch(`${BASE}/tasks/${taskId}/progress`, { credentials: "include" }));
@@ -78,6 +96,30 @@ export const api = {
     );
   },
 
+  async listProjects(): Promise<Project[]> {
+    return j(await fetch(`${BASE}/projects`, { credentials: "include" }));
+  },
+  async createProject(data: { name: string; repo_path: string; default_branch?: string; agent_instructions?: string }): Promise<Project> {
+    return j(await fetch(`${BASE}/projects`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(data) }));
+  },
+  async getProject(id: number): Promise<Project> {
+    return j(await fetch(`${BASE}/projects/${id}`, { credentials: "include" }));
+  },
+  async updateProject(id: number, data: Partial<Pick<Project, "name" | "repo_path" | "default_branch" | "agent_instructions">>): Promise<Project> {
+    return j(await fetch(`${BASE}/projects/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(data) }));
+  },
+  async listAttachments(taskId: number): Promise<Attachment[]> {
+    return j(await fetch(`${BASE}/artifacts/task/${taskId}`, { credentials: "include" }));
+  },
+  async uploadAttachment(taskId: number, file: File): Promise<Attachment> {
+    const data = new FormData();
+    data.append("file", file);
+    return j(await fetch(`${BASE}/artifacts/task/${taskId}/upload`, { method: "POST", credentials: "include", body: data }));
+  },
+  async acceptance(taskId: number, approve: boolean, comment: string): Promise<Task> {
+    return j(await fetch(`${BASE}/tasks/${taskId}/acceptance`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve, comment }) }));
+  },
+
   // ---- Auth ----
   async login(username: string, password: string): Promise<{ username: string; is_admin: boolean }> {
     return j(await fetch(`${BASE}/login`, {
@@ -96,7 +138,7 @@ export const api = {
   async setupStatus(): Promise<{ needs_setup: boolean }> {
     return j(await fetch(`${BASE}/setup-status`, { credentials: "include" }));
   },
-  async listTokens(): Promise<Array<{ id: number; agent_name: string; description: string | null; created_at: string; last_used_at: string | null }>> {
+  async listTokens(): Promise<Array<{ id: number; can_reveal: boolean; agent_name: string; description: string | null; created_at: string; last_used_at: string | null }>> {
     return j(await fetch(`${BASE}/tokens`, { credentials: "include" }));
   },
   async createToken(agent_name: string, description?: string): Promise<{ id: number; agent_name: string; description: string | null; token: string }> {
@@ -107,8 +149,50 @@ export const api = {
       body: JSON.stringify({ agent_name, description }),
     }));
   },
+  async revealToken(id: number): Promise<{ token: string; agent_name: string }> {
+    return j(await fetch(`${BASE}/tokens/${id}/reveal`, { method: "POST", credentials: "include" }));
+  },
+  async regenerateToken(id: number): Promise<{ token: string; agent_name: string }> {
+    return j(await fetch(`${BASE}/tokens/${id}/regenerate`, { method: "POST", credentials: "include" }));
+  },
+  async checkMcpToken(token: string): Promise<void> {
+    const headers: Record<string, string> = {
+      "Authorization": `Bearer ${token}`,
+      "Accept": "application/json, text/event-stream",
+      "Content-Type": "application/json",
+      "mcp-protocol-version": "2024-11-05",
+    };
+    async function rpc(message: object) {
+      const response = await fetch("/mcp", {
+        method: "POST", headers, credentials: "omit",
+        body: JSON.stringify(message), signal: AbortSignal.timeout(10000),
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`MCP HTTP ${response.status}`);
+      if (response.headers.get("mcp-session-id")) headers["mcp-session-id"] = response.headers.get("mcp-session-id")!;
+      if (!text) return null;
+      const data = text.split(/\r?\n/).find(line => line.startsWith("data:"));
+      const body = JSON.parse(data ? data.slice(5) : text);
+      if (body.error) throw new Error(body.error.message);
+      if (body.result?.isError) throw new Error(body.result.content?.[0]?.text || "MCP authentication failed");
+      return body;
+    }
+    try {
+      await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
+        protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "AI Tasker token check", version: "1" },
+      } });
+      await rpc({ jsonrpc: "2.0", method: "notifications/initialized" });
+      for (const [index, name] of ["list_projects", "list_tasks"].entries()) {
+        await rpc({ jsonrpc: "2.0", id: index + 2, method: "tools/call", params: { name, arguments: {} } });
+      }
+    } finally {
+      if (headers["mcp-session-id"]) {
+        await fetch("/mcp", { method: "DELETE", headers, credentials: "omit", signal: AbortSignal.timeout(5000) }).catch(() => {});
+      }
+    }
+  },
   async deleteToken(id: number): Promise<void> {
-    await fetch(`${BASE}/tokens/${id}`, { method: "DELETE", credentials: "include" });
+    await j(await fetch(`${BASE}/tokens/${id}`, { method: "DELETE", credentials: "include" }));
   },
   async listUsers(): Promise<Array<{ id: number; username: string; is_admin: boolean; created_at: string }>> {
     return j(await fetch(`${BASE}/users`, { credentials: "include" }));

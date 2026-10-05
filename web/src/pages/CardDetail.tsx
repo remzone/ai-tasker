@@ -1,226 +1,67 @@
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { api, subscribeWebSocket } from "../api";
 import type { WSSubscription } from "../api";
-import type { Comment, ProgressEvent, Task } from "../types";
+import type { Attachment, Comment, ProgressEvent, Task, TaskContext } from "../types";
 import { ProgressFeed } from "../components/ProgressFeed";
 import { CommentList } from "../components/CommentList";
+import { ArtifactCard } from "../components/ArtifactCard";
+import { WorkflowPanel } from "../components/WorkflowPanel";
+import { NewTaskModal } from "../components/NewTaskModal";
 import { STATUS_META } from "../statusMeta";
-import { useT } from "../i18n.tsx";
-import { prStatusLabel } from "../components/TaskCard";
+import { useT, localeBcp47 } from "../i18n.tsx";
 
 export function CardDetail({ taskId, onBack }: { taskId: number; onBack: () => void }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const [task, setTask] = useState<Task | null>(null);
+  const [context, setContext] = useState<TaskContext | null>(null);
+  const [prompt, setPrompt] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [agents, setAgents] = useState<string[]>([]);
-
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
   async function refresh() {
-    setTask(await api.getTask(taskId));
-    setProgress(await api.listProgress(taskId));
-    setComments(await api.listComments(taskId));
+    const [tk, pr, cm, at] = await Promise.all([api.getTaskContext(taskId), api.listProgress(taskId), api.listComments(taskId), api.listAttachments(taskId)]);
+    setTask(tk); setContext(tk); setProgress(pr); setComments(cm); setAttachments(at);
   }
-
   useEffect(() => {
-    let sub: WSSubscription | null = null;
-    let cancelled = false;
-    refresh();
-    subscribeWebSocket(taskId, () => refresh()).then((s) => {
-      if (cancelled) {
-        s.close();
-      } else {
-        sub = s;
-      }
-    });
-    return () => {
-      cancelled = true;
-      sub?.close();
-    };
+    let sub: WSSubscription | null = null; let cancelled = false;
+    const update = () => { refresh().catch(e => setError(String(e))); };
+    update();
+    subscribeWebSocket(taskId, update).then(s => { if (cancelled) s.close(); else sub = s; });
+    return () => { cancelled = true; sub?.close(); };
   }, [taskId]);
-
-  // Load agent names (from tokens) once for the assign selector.
-  useEffect(() => {
-    api
-      .listTokens()
-      .then((tokens) => setAgents([...new Set(tokens.map((tk) => tk.agent_name))].sort()))
-      .catch(() => setAgents([]));
-  }, []);
-
-  if (!task) {
-    return (
-      <div style={{ padding: 40, color: "var(--text-mute)", textAlign: "center" }}>
-        {t("common.loading")}
-      </div>
-    );
+  async function action(work: () => Promise<unknown>) {
+    setBusy(true); setError("");
+    try { await work(); await refresh(); }
+    catch(e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
   }
-
+  if (!task) return <div className="loading">{error ? <p role="alert">{error}</p> : t("common.loading")}</div>;
   const meta = STATUS_META[task.status];
-
-  return (
-    <div style={{ padding: "20px 20px 32px", maxWidth: 1100, margin: "0 auto" }}>
-      <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ marginBottom: 16 }}>
-        {t("card.back")}
-      </button>
-
-      <div className="eyebrow" style={{ marginBottom: 4 }}>{t("card.taskPrefix", { id: String(task.id) })}</div>
-      <h1 style={{ marginBottom: 14 }}>{task.title}</h1>
-
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          flexWrap: "wrap",
-          alignItems: "center",
-          marginBottom: 20,
-        }}
-      >
-        <span className={`badge badge-${meta.badge}`}>
-          <span className="badge-dot" />
-          {t(meta.labelKey)}
-        </span>
-        {task.assigned_to && (
-          <span
-            className="mono"
-            title={t("card.reservedTooltip")}
-            style={{
-              fontSize: "var(--text-small)",
-              color: "var(--accent-pressed)",
-              background: "var(--accent-soft)",
-              padding: "1px 8px",
-              borderRadius: 999,
-            }}
-          >
-            → {task.assigned_to}
-          </span>
-        )}
-        {task.claimed_by && (
-          <span className="muted" style={{ fontSize: "var(--text-small)" }}>
-            {t("task.claimedBy", { name: task.claimed_by })}
-          </span>
-        )}
-        {task.branch && (
-          <span className="mono" style={{ fontSize: "var(--text-small)" }}>
-            ⌥ {task.branch}
-          </span>
-        )}
-        {task.pr_url && (
-          <a
-            href={task.pr_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mono"
-            style={{ fontSize: "var(--text-small)" }}
-          >
-            {t("task.pr", { num: String(task.pr_url.split("/").pop()) })}
-            {task.pr_status ? ` · ${prStatusLabel(task.pr_status, t)}` : ""}
-          </a>
-        )}
+  const history = progress.filter(e => e.payload.decision);
+  return <div className="page task-page">
+    <button className="btn btn-ghost btn-sm" onClick={onBack}>{t("card.back")}</button>
+    <div className="page-heading"><div><div className="eyebrow">{t("card.taskPrefix", { id: task.id })}</div><h1>{task.title}</h1><span className={`badge badge-${meta.badge}`}><span className="badge-dot" />{t(meta.labelKey)}</span></div><button className="btn" onClick={() => setEditing(true)}>{t("common.edit")}</button></div>
+    {error && <p role="alert" className="error-banner">{error}</p>}
+    <div className="task-layout">
+      <div className="task-main">
+        <section className="panel"><h3>{t("card.section.details")}</h3><div className="markdown"><ReactMarkdown>{task.description || t("card.noDescription")}</ReactMarkdown></div><h3>{t("form.criteria")}</h3><div className="markdown"><ReactMarkdown>{task.acceptance_criteria || t("card.noCriteria")}</ReactMarkdown></div></section>
+        <section className="panel"><h3>{t("instructions.title")}</h3><h4>{t("instructions.project")}</h4><div className="markdown"><ReactMarkdown>{context?.project_agent_instructions || t("instructions.empty")}</ReactMarkdown></div><h4>{t("instructions.task")}</h4><div className="markdown"><ReactMarkdown>{task.agent_instructions || t("instructions.empty")}</ReactMarkdown></div><p className="muted">{t("instructions.hint")}</p><button className="btn" onClick={() => { setCopied(false); void action(async () => { const current = await api.getTaskContext(taskId); setPrompt(current.agent_prompt); }); }}>{t("instructions.prompt")}</button></section>
+        <section className="panel"><h3>{t("card.summary")}</h3><div className="markdown"><ReactMarkdown>{task.work_summary || t("card.noSummary")}</ReactMarkdown></div></section>
+        <section className="panel"><h3>{t("card.history")}</h3>{!history.length && <p className="muted">{t("card.historyEmpty")}</p>}{history.map(ev => { const st = ev.payload.status as { from: keyof typeof STATUS_META; to: keyof typeof STATUS_META }; return <div className="decision-entry" key={ev.id}><div><span className={`badge badge-${ev.payload.decision === "APPROVE" || ev.payload.decision === "ACCEPT" ? "success" : "warning"}`}>{String(ev.payload.decision)}</span><small className="muted">{ev.agent} · {new Date(ev.created_at).toLocaleString(localeBcp47(locale))}</small></div><p className="muted">{t(STATUS_META[st.from].labelKey)} → {t(STATUS_META[st.to].labelKey)}</p><ReactMarkdown>{String(ev.payload.content ?? "")}</ReactMarkdown></div>; })}</section>
+        <section className="panel"><h3>{t("card.section.progress")}</h3>{!progress.length && <p className="muted">{t("card.noProgress")}</p>}<ProgressFeed events={progress} /><CommentList taskId={taskId} comments={comments} taskStatus={task.status} onPosted={refresh} /></section>
       </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(280px, 1fr)", gap: 20 }}>
-        <div style={{ minWidth: 0 }}>
-          <h4 style={{ marginBottom: 10 }}>{t("card.section.progress")}</h4>
-          <ProgressFeed events={progress} />
-          <CommentList taskId={taskId} comments={comments} taskStatus={task.status} onPosted={refresh} />
-        </div>
-        <div>
-          <h4 style={{ marginBottom: 10 }}>{t("card.section.details")}</h4>
-          <div
-            style={{
-              background: "var(--surface)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius)",
-              padding: 14,
-              fontSize: "var(--text-body)",
-              lineHeight: 1.6,
-            }}
-          >
-            {task.description || <span className="muted">{t("card.noDescription")}</span>}
-          </div>
-
-          {task.tags.length > 0 && (
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 12 }}>
-              {task.tags.map((tg) => (
-                <span key={tg} className="tag">{tg}</span>
-              ))}
-            </div>
-          )}
-
-          {/* Assignment control — operator reserves the task for one agent. */}
-          <div style={{ marginTop: 16 }}>
-            <label className="eyebrow" style={{ display: "block", marginBottom: 6 }}>
-              {t("card.assignedTo")}
-            </label>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <select
-                className="input mono"
-                value={task.assigned_to ?? ""}
-                onChange={async (e) => {
-                  setActionError(null);
-                  try {
-                    await api.updateTask(taskId, {
-                      assigned_to: e.target.value || null,
-                    });
-                    refresh();
-                  } catch (err) {
-                    setActionError(
-                      err instanceof Error ? err.message : t("card.error.assign")
-                    );
-                  }
-                }}
-                title={t("card.assignTooltip")}
-                style={{ width: "auto", flex: 1 }}
-              >
-                <option value="">{t("card.assignAnyone")}</option>
-                {agents.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 16 }}>
-            {actionError && (
-              <div className="badge badge-error" style={{ marginBottom: 8, width: "100%" }}>
-                {actionError}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                className="btn"
-                onClick={async () => {
-                  setActionError(null);
-                  try {
-                    await api.updateTask(taskId, { status: "ready" });
-                    refresh();
-                  } catch (e) {
-                    setActionError(e instanceof Error ? e.message : t("card.error.update"));
-                  }
-                }}
-              >
-                {t("card.reopenReady")}
-              </button>
-              <button
-                className="btn btn-danger"
-                onClick={async () => {
-                  setActionError(null);
-                  try {
-                    await api.updateTask(taskId, { status: "cancelled" });
-                    refresh();
-                  } catch (e) {
-                    setActionError(e instanceof Error ? e.message : t("card.error.update"));
-                  }
-                }}
-              >
-                {t("card.cancel")}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <aside className="task-aside">
+        {["in_progress", "review", "acceptance"].includes(task.status) && <WorkflowPanel key={`${task.id}-${task.status}-${task.review_assigned_to ?? ""}`} task={task} onChanged={refresh} />}
+        <section className="panel"><h3>{t("card.repo")}</h3><p className="mono repo-path">{task.repo_path || "—"}</p>{task.base_branch && <p className="muted mono">{task.base_branch}{task.branch ? ` → ${task.branch}` : ""}</p>}{task.pr_url && <a href={task.pr_url} target="_blank" rel="noreferrer">PR ↗</a>}<hr /><p className="muted">{task.claimed_by ? t("task.claimedBy", { name: task.claimed_by }) : task.status === "in_progress" ? t("card.returnWaiting") : t("newTask.assignAnyone")}</p>{task.assigned_to && <span className="badge badge-info">→ {task.assigned_to}</span>}{task.reviewer && <p className="muted">{t("card.reviewer", { name: task.reviewer })}</p>}{task.status === "review" && <p className="muted">{t("card.waitReview")}</p>}<div className="tags">{task.tags.map(tag => <span className="tag" key={tag}>{tag}</span>)}</div>{["todo", "in_progress", "review", "acceptance"].includes(task.status) && <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.workflow(taskId, "ready"))}>{t("card.moveReady")}</button>}{task.status === "ready" && <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.workflow(taskId, "start"))}>{t("workflow.start")}</button>}{task.status === "ready" && <button className="btn" disabled={busy} onClick={() => action(() => api.updateTask(taskId, { status: "todo" }))}>{t("card.moveBacklog")}</button>}{(task.status === "blocked" || task.status === "cancelled" || task.status === "done") && <button className="btn" disabled={busy} onClick={() => action(() => api.updateTask(taskId, { status: task.status === "blocked" ? "ready" : "todo" }))}>{t("card.reopenReady")}</button>}</section>
+        <section className="panel"><h3>{t("form.files")}</h3><div className="attachments">{attachments.map(a => <ArtifactCard key={a.id} artifact={a} description={a.description || undefined} />)}</div><label className="upload-label"><span className="btn">{t("form.upload")}</span><input type="file" disabled={busy} onChange={e => { const file = e.target.files?.[0]; if (file) void action(() => api.uploadAttachment(taskId, file)); e.target.value = ""; }} /><small className="muted">{t("form.fileHint")}</small></label></section>
+      </aside>
     </div>
-  );
+    {prompt !== null && <div className="modal-backdrop" onClick={() => setPrompt(null)}><div className="card modal task-modal" role="dialog" aria-modal="true" aria-labelledby="agent-prompt-title" onClick={e => e.stopPropagation()}><h2 id="agent-prompt-title">{t("instructions.prompt")}</h2><textarea className="input mono" rows={18} readOnly aria-label={t("instructions.prompt")} value={prompt} onFocus={e => e.currentTarget.select()} /><p className="muted">{t("instructions.copyHint")}</p><div className="form-actions"><button className="btn" onClick={() => setPrompt(null)}>{t("common.close")}</button><button className="btn btn-primary" onClick={async () => { try { await navigator.clipboard.writeText(prompt); setCopied(true); } catch { setCopied(false); } }}>{copied ? t("instructions.copied") : t("instructions.copy")}</button></div></div></div>}
+    {editing && <NewTaskModal task={task} onClose={() => setEditing(false)} onCreated={() => { void refresh(); }} />}
+  </div>;
 }

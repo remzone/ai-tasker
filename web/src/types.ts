@@ -3,6 +3,7 @@ export type TaskStatus =
   | "ready"
   | "in_progress"
   | "review"
+  | "acceptance"
   | "done"
   | "blocked"
   | "cancelled";
@@ -12,6 +13,11 @@ export interface Task {
   project_id: number | null;
   title: string;
   description: string;
+  agent_instructions: string;
+  acceptance_criteria: string;
+  work_summary: string;
+  reviewer: string | null;
+  review_assigned_to: string | null;
   status: TaskStatus;
   tags: string[];
   claimed_by: string | null;
@@ -56,4 +62,26 @@ export interface Comment {
   content: string;
   seen_by_agent: boolean;
   created_at: string;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  agent_instructions: string;
+  repo_path: string | null;
+  default_branch: string | null;
+  created_at: string;
+}
+export interface Attachment {
+  id: number;
+  task_id: number;
+  path: string;
+  kind: string;
+  description: string | null;
+}
+
+export interface TaskContext extends Task {
+  project_agent_instructions: string;
+  effective_agent_instructions: string;
+  agent_prompt: string;
 }

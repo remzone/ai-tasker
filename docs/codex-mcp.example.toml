@@ -1,0 +1,7 @@
+# На странице «Настройки и MCP» выберите агента → «Копировать конфиг Codex».
+# Замените ВАШ_ТОКЕН_АГЕНТА токеном этого агента, а не SESSION_SECRET.
+[mcp_servers.tasker]
+url = "http://localhost:7331/mcp"
+
+[mcp_servers.tasker.http_headers]
+Authorization = "Bearer ВАШ_ТОКЕН_АГЕНТА"

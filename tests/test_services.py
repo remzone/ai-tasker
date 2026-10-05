@@ -77,11 +77,11 @@ async def test_post_progress_requires_claimer(session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_complete_task_sets_done(session: AsyncSession):
+async def test_complete_task_submits_for_review(session: AsyncSession):
     t = await create_task(session, TaskCreate(title="t", status=TaskStatus.READY))
     await claim_task(session, t.id, "codex")
     done = await complete_task(session, t.id, "codex", summary="all done")
-    assert done.status == TaskStatus.DONE
+    assert done.status == TaskStatus.REVIEW
 
 
 @pytest.mark.asyncio

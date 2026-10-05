@@ -332,3 +332,96 @@ async def test_patch_user_password_uses_acting_admin_current_password(client):
     # pleb can now log in with the new password.
     r = await client.post("/api/login", json={"username": "pleb", "password": "newpass123"})
     assert r.status_code == 200
+
+
+async def _token_admin(client):
+    await client.post('/api/setup', json={'username': 'vault-admin', 'password': 'test-password'})
+    await client.post('/api/login', json={'username': 'vault-admin', 'password': 'test-password'})
+
+
+@pytest.mark.asyncio
+async def test_token_reveal_persists_encrypted_without_listing_secret(client):
+    from agent_kanban.auth import decrypt_token
+    from agent_kanban.db import AsyncSessionLocal
+    from agent_kanban.models import Token
+    await _token_admin(client)
+    created = await client.post('/api/tokens', json={'agent_name': ' codex '})
+    assert created.headers['cache-control'] == 'no-store'
+    token = created.json()
+    assert token['agent_name'] == 'codex'
+    async with AsyncSessionLocal() as session:
+        stored = await session.get(Token, token['id'])
+        assert token['token'] not in stored.token_ciphertext
+        assert decrypt_token(stored.token_ciphertext) == token['token']
+    listing = await client.get('/api/tokens')
+    assert listing.json()[0]['can_reveal'] is True
+    assert token['token'] not in listing.text
+    assert 'token_ciphertext' not in listing.text
+    # A fresh app and HTTP client can reveal after login: not a browser-memory cache.
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url='http://test') as fresh:
+        await fresh.post('/api/login', json={'username': 'vault-admin', 'password': 'test-password'})
+        revealed = await fresh.post(f'/api/tokens/{token["id"]}/reveal')
+        assert revealed.status_code == 200
+        assert revealed.headers['cache-control'] == 'no-store'
+        assert revealed.json()['token'] == token['token']
+
+
+@pytest.mark.asyncio
+async def test_token_reveal_and_regenerate_require_human_admin(client):
+    await _token_admin(client)
+    token = (await client.post('/api/tokens', json={'agent_name': 'codex'})).json()
+    await client.post('/api/users', json={'username': 'member', 'password': 'member-password', 'is_admin': False})
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url='http://test') as other:
+        for action in ('reveal', 'regenerate'):
+            url = f'/api/tokens/{token["id"]}/{action}'
+            assert (await other.post(url)).status_code == 401
+            assert (await other.post(url, headers={'Authorization': f'Bearer {token["token"]}'})).status_code == 403
+        await other.post('/api/login', json={'username': 'member', 'password': 'member-password'})
+        for action in ('reveal', 'regenerate'):
+            assert (await other.post(f'/api/tokens/{token["id"]}/{action}')).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_legacy_token_replacement_revokes_old_and_preserves_agent(client):
+    from agent_kanban.auth import generate_token, hash_token
+    from agent_kanban.db import AsyncSessionLocal
+    from agent_kanban.models import Token
+    await _token_admin(client)
+    user = (await client.get('/api/me')).json()
+    old = generate_token()
+    async with AsyncSessionLocal() as session:
+        legacy = Token(agent_name='architect', token_hash=hash_token(old), token_prefix=old[:8], created_by_user_id=user['user_id'], description='Architecture')
+        session.add(legacy)
+        await session.commit()
+        await session.refresh(legacy)
+        token_id = legacy.id
+    assert (await client.get('/api/tokens')).json()[0]['can_reveal'] is False
+    assert (await client.post(f'/api/tokens/{token_id}/reveal')).status_code == 409
+    replacement = await client.post(f'/api/tokens/{token_id}/regenerate')
+    assert replacement.status_code == 200
+    assert replacement.headers['cache-control'] == 'no-store'
+    assert replacement.json()['agent_name'] == 'architect'
+    new = replacement.json()['token']
+    assert new != old
+    async with AsyncClient(transport=ASGITransport(app=create_app()), base_url='http://test') as agent:
+        assert (await agent.get('/api/me', headers={'Authorization': f'Bearer {old}'})).status_code == 401
+        assert (await agent.get('/api/me', headers={'Authorization': f'Bearer {new}'})).json()['agent_name'] == 'architect'
+        await client.delete(f'/api/tokens/{token_id}')
+        assert (await agent.get('/api/me', headers={'Authorization': f'Bearer {new}'})).status_code == 401
+    assert (await client.post(f'/api/tokens/{token_id}/reveal')).status_code == 404
+
+
+def test_token_cipher_rejects_changed_key(monkeypatch):
+    from cryptography.fernet import InvalidToken
+    from agent_kanban.auth import decrypt_token, encrypt_token
+    from agent_kanban.config import get_settings
+    monkeypatch.setenv('SESSION_SECRET', 'original-random-key-for-test')
+    get_settings.cache_clear()
+    encrypted = encrypt_token('agent-token')
+    monkeypatch.setenv('SESSION_SECRET', 'different-random-key-for-test')
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(InvalidToken):
+            decrypt_token(encrypted)
+    finally:
+        get_settings.cache_clear()

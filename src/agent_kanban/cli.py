@@ -45,14 +45,14 @@ def main() -> None:
 
 
 def _run_migrations() -> None:
-    import os
+    from agent_kanban.config import get_settings
     from alembic import command
     from alembic.config import Config
 
     cfg = Config("alembic.ini")
-    url = os.environ.get("DATABASE_URL")
-    if url:
-        cfg.set_main_option("sqlalchemy.url", url.replace("+asyncpg", ""))
+    # Serving reads .env via Settings; migrations must target the same DB.
+    url = get_settings().database_url
+    cfg.set_main_option("sqlalchemy.url", url.replace("+asyncpg", ""))
     command.upgrade(cfg, "head")
     print("Migrations applied.")
 

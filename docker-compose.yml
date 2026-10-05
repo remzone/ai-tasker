@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: kanban
       POSTGRES_PASSWORD: kanban
@@ -19,6 +20,7 @@ services:
 
   app:
     build: .
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -26,10 +28,20 @@ services:
       DATABASE_URL: postgresql+asyncpg://kanban:kanban@postgres:5432/kanban
       PORT: "7331"
       SESSION_SECRET: '${SESSION_SECRET:?SESSION_SECRET is required — generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"}'
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:7331}
+      AGENT_KANBAN_ARTIFACT_DIR: /app/artifacts
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:${HOST_PORT:-7331}}
       AGENT_KANBAN_BOOTSTRAP_ADMIN_PASSWORD: ${AGENT_KANBAN_BOOTSTRAP_ADMIN_PASSWORD:-}
+    volumes:
+      - ak_artifacts:/app/artifacts
     ports:
-      - "7331:7331"
+      - "127.0.0.1:${HOST_PORT:-7331}:7331"
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7331/api/setup-status', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
 volumes:
   ak_pgdata:
+  ak_artifacts:

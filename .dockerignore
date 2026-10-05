@@ -13,3 +13,9 @@ build
 .coverage
 htmlcov
 .env
+.tools
+.runtime
+
+.env.*
+tests
+docs

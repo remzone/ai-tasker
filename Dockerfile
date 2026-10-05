@@ -1,24 +1,23 @@
 # Stage 1: build the React frontend
-FROM node:20-slim AS web-builder
+FROM node:22-slim AS web-builder
 WORKDIR /web
-RUN npm install -g pnpm
-COPY web/package.json web/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
 COPY web/ ./
-RUN pnpm build
+RUN npm run build
 
 # Stage 2: Python runtime
 FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 gcc && rm -rf /var/lib/apt/lists/*
+    libpq5 gcc git && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 WORKDIR /app
-COPY pyproject.toml uv.lock* README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/
 COPY alembic.ini ./
-RUN uv sync --frozen || uv sync
+RUN uv sync --frozen --no-dev
 COPY --from=web-builder /web/dist ./static
 ENV AGENT_KANBAN_STATIC_DIR=/app/static
 EXPOSE 7331
-CMD ["sh", "-c", "uv run kanban migrate && uv run kanban serve --host 0.0.0.0 --port 7331"]
+CMD ["sh", "-c", "/app/.venv/bin/kanban migrate && /app/.venv/bin/kanban serve --host 0.0.0.0 --port 7331"]
