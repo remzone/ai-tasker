@@ -49,7 +49,13 @@ def _run_migrations() -> None:
     from alembic import command
     from alembic.config import Config
 
-    cfg = Config("alembic.ini")
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    if not (root / "alembic.ini").is_file():
+        root = Path.cwd()
+    cfg = Config(str(root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "migrations"))
     # Serving reads .env via Settings; migrations must target the same DB.
     url = get_settings().database_url
     cfg.set_main_option("sqlalchemy.url", url.replace("+asyncpg", ""))

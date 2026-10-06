@@ -14,7 +14,25 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface DraftResult {
+  title: string; description: string; acceptance_criteria: string; agent_instructions: string;
+}
+export interface OpenRouterConfig { model: string; has_key: boolean; has_management_key: boolean }
+export interface OpenRouterBalance { balance: number | null; key_remaining: number | null; usage: number | null }
+
 export const api = {
+  async openRouterSettings(): Promise<OpenRouterConfig> {
+    return j(await fetch(`${BASE}/openrouter/settings`, { credentials: "include" }));
+  },
+  async saveOpenRouter(data: { model: string; api_key?: string; clear_key?: boolean; management_key?: string; clear_management_key?: boolean }): Promise<OpenRouterConfig> {
+    return j(await fetch(`${BASE}/openrouter/settings`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }));
+  },
+  async openRouterBalance(): Promise<OpenRouterBalance> {
+    return j(await fetch(`${BASE}/openrouter/balance`, { credentials: "include" }));
+  },
+  async draftTask(data: DraftResult & { mode: "spec" | "criteria"; project_instructions: string; language: "ru" | "en" }): Promise<DraftResult> {
+    return j(await fetch(`${BASE}/openrouter/draft`, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }));
+  },
   async listTasks(status?: TaskStatus, projectId?: number): Promise<Task[]> {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
@@ -63,9 +81,6 @@ export const api = {
         body: JSON.stringify(patch),
       })
     );
-  },
-  async runAgent(id: number): Promise<{ task_id: number; agent: string; mode: string }> {
-    return j(await fetch(`${BASE}/tasks/${id}/run-agent`, { method: "POST", credentials: "include" }));
   },
   async workflow(id: number, action: "ready" | "start" | "review" | "human_review" | "accept" | "return", comment = "", reviewer?: string): Promise<Task> {
     return j(await fetch(`${BASE}/tasks/${id}/workflow`, {

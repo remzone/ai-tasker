@@ -37,6 +37,8 @@ def _to_task_read(task: Task) -> TaskRead:
 
 
 def _check_claimer(task: Task, agent: str) -> None:
+    if task.status == TaskStatus.BLOCKED:
+        raise ValueError("task is blocked; a human must resolve the blocker first")
     if task.claimed_by != agent:
         raise PermissionError(
             f"task {task.id} is claimed by {task.claimed_by!r}, not {agent!r}"
@@ -94,9 +96,12 @@ async def update_task(session: AsyncSession, task_id: int, data: TaskUpdate) -> 
         # Drag-and-drop is for planning only. Agent work, review and acceptance
         # use dedicated operations so a PATCH cannot bypass any gate.
         allowed = {
-            TaskStatus.TODO: {TaskStatus.READY},
-            TaskStatus.READY: {TaskStatus.TODO},
-            TaskStatus.BLOCKED: {TaskStatus.READY},
+            TaskStatus.TODO: {TaskStatus.READY, TaskStatus.BLOCKED},
+            TaskStatus.READY: {TaskStatus.TODO, TaskStatus.BLOCKED},
+            TaskStatus.IN_PROGRESS: {TaskStatus.BLOCKED},
+            TaskStatus.REVIEW: {TaskStatus.BLOCKED},
+            TaskStatus.ACCEPTANCE: {TaskStatus.BLOCKED},
+            TaskStatus.BLOCKED: set(),
             TaskStatus.CANCELLED: {TaskStatus.TODO},
             TaskStatus.DONE: {TaskStatus.TODO},
         }
@@ -282,7 +287,14 @@ async def post_progress(
             raise ValueError("use request_review for lifecycle transitions")
         payload["status"] = data.status
         if data.status.get("to") == "blocked":
+            if not data.content.strip():
+                raise ValueError("describe the blocker for the human")
+            payload["status"] = {"from": task.status.value, "to": "blocked", "note": data.content}
             task.status = TaskStatus.BLOCKED
+            task.claimed_by = None
+            task.claimed_at = None
+            task.reviewer = None
+            task.review_assigned_to = None
             task.updated_at = datetime.now(UTC).replace(tzinfo=None)
             blocked = True
     ev = ProgressEvent(
@@ -610,11 +622,14 @@ def artifact_root(task_id: int) -> Path:
     return Path(os.environ.get("AGENT_KANBAN_ARTIFACT_DIR", ".runtime/artifacts")).resolve() / str(task_id)
 
 
-async def task_context(session: AsyncSession, task_id: int) -> dict:
+async def task_context(session: AsyncSession, task_id: int, agent_name: Optional[str] = None) -> dict:
     task = await get_task(session, task_id)
     project = await session.get(Project, task.project_id) if task.project_id else None
     data = _to_task_read(task).model_dump(mode="json")
     data["repo_path"] = task.repo_path or (project.repo_path if project else None)
+    if agent_name is not None:
+        from agent_kanban.repo_paths import repository_paths
+        data.update(await repository_paths(session, project, data["repo_path"], agent_name))
     data["base_branch"] = task.base_branch or (project.default_branch if project else None)
     comments = await list_comments(session, task_id, None, None)
     progress = (await session.execute(select(ProgressEvent).where(ProgressEvent.task_id == task_id).order_by(ProgressEvent.id))).scalars().all()
@@ -622,7 +637,7 @@ async def task_context(session: AsyncSession, task_id: int) -> dict:
     data["comments"] = [c.model_dump(mode="json") for c in comments]
     data["progress"] = [e.model_dump(mode="json") for e in progress]
     data["attachments"] = [dict(a.model_dump(mode="json"), content_url=f"/api/artifacts/{a.id}/content") for a in artifacts]
-    data["repository_instructions"] = "Work directly in repo_path. Read AGENTS.md and repository skills/instructions before changes. Codex can be launched only by an explicit human run-agent action."
+    data["repository_instructions"] = "Work directly in repo_path. Read AGENTS.md and repository skills/instructions before changes. Claim the task or review through MCP before working."
     data["project_agent_instructions"] = project.agent_instructions if project else ""
     data["effective_agent_instructions"] = "\n\n".join(
         text for text in (data["project_agent_instructions"], task.agent_instructions) if text
@@ -654,6 +669,8 @@ async def human_workflow(session: AsyncSession, task_id: int, actor: str, action
     task = await locked_task(session, task_id)
     active = {TaskStatus.IN_PROGRESS, TaskStatus.REVIEW, TaskStatus.ACCEPTANCE}
     note = comment.strip()
+    if task.status == TaskStatus.BLOCKED and (action != "ready" or not note):
+        raise ValueError("Опишите решение блокера человеком перед возвратом задачи в работу")
     if action == "ready":
         if task.status == TaskStatus.READY:
             return task

@@ -405,3 +405,50 @@ async def test_human_workflow_requeue_assignment_and_acceptance(http_client):
     assert 'REQUEUE' in decisions and 'SEND_REVIEW' in decisions and 'ACCEPT' in decisions and 'RETURN' in decisions
     comments = (await http_client.get(f'/api/tasks/{task_id}/comments')).json()
     assert any('Personally verified' in c['content'] for c in comments)
+
+
+@pytest.mark.asyncio
+async def test_personal_paths_isolated_by_current_request_token(http_client):
+    await http_client.post("/api/login", json={"username": "admin", "password": "pw"})
+    project = (await http_client.post("/api/projects", json={
+        "name": "Shared paths", "repo_path": "/srv/shared",
+    })).json()
+    task = (await http_client.post("/api/tasks", json={
+        "title": "Common task", "project_id": project["id"], "status": "ready",
+    })).json()
+    agents = []
+    for name in ("anna", "ivan"):
+        token = (await http_client.post("/api/tokens", json={"agent_name": name})).json()["token"]
+        agent = WireAgent(http_client, token, name)
+        await agent.initialize()
+        agents.append(agent)
+    anna, ivan = agents
+    await anna.call("set_project_path", {"project_id": project["id"], "local_repo_path": "/home/anna/app"})
+    await ivan.call("set_project_path", {"project_id": project["id"], "local_repo_path": "/mnt/c/work/app"})
+    for agent, path in ((anna, "/home/anna/app"), (ivan, "/mnt/c/work/app")):
+        assert (await agent.call("list_projects"))[0]["repo_path"] == path
+        context = await agent.call("get_task_context", {"task_id": task["id"]})
+        assert context["repo_path"] == path
+        assert context["server_repo_path"] == "/srv/shared"
+    # Even within Anna's existing MCP session, Ivan's request token determines
+    # which binding can be modified; the initialization identity is not reused.
+    anna.headers["Authorization"] = ivan.headers["Authorization"]
+    changed = await anna.call("set_project_path", {
+        "project_id": project["id"], "local_repo_path": "/home/ivan/new",
+    })
+    assert changed["agent_name"] == "ivan"
+    assert (await ivan.call("get_task_context", {"task_id": task["id"]}))["repo_path"] == "/home/ivan/new"
+    anna.headers["Authorization"] = "Bearer invalid"
+    await anna.call("set_project_path", {"project_id": project["id"], "local_repo_path": "/evil"}, error=True)
+    # A new token with the same agent name retains the existing path.
+    anna_token = (await http_client.post("/api/tokens", json={"agent_name": "anna"})).json()["token"]
+    anna.headers["Authorization"] = f"Bearer {anna_token}"
+    assert (await anna.call("get_task_context", {"task_id": task["id"]}))["repo_path"] == "/home/anna/app"
+    await ivan.call("set_project_path", {"project_id": project["id"], "local_repo_path": None})
+    assert (await ivan.call("get_task_context", {"task_id": task["id"]}))["repo_path"] == "/srv/shared"
+    claimed = await anna.call("claim_task", {"task_id": task["id"], "agent": "anna"})
+    assert claimed["ok"] and claimed["task"]["repo_path"] == "/home/anna/app"
+    rival = await ivan.call("claim_task", {"task_id": task["id"], "agent": "ivan"})
+    assert not rival["ok"]
+    shared = (await http_client.get(f"/api/tasks/{task['id']}/context")).json()
+    assert shared["repo_path"] == "/srv/shared"

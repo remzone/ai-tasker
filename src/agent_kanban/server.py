@@ -1,4 +1,5 @@
 """FastAPI app factory."""
+import asyncio
 import contextlib
 import os
 
@@ -14,6 +15,7 @@ from starlette.requests import Request
 
 from agent_kanban.config import get_settings
 from agent_kanban.mcp_server import MCPAuthMiddleware, create_mcp
+from agent_kanban.routes import openrouter
 from agent_kanban.ratelimit import limiter
 from agent_kanban.routes import artifacts, auth as auth_routes, comments, progress, projects, tasks, ws
 
@@ -103,6 +105,8 @@ def create_app() -> FastAPI:
             )
         # Bootstrap the admin user BEFORE starting the MCP session manager so
         # the admin exists before any authenticated request can be served.
+        from agent_kanban.cli import _run_migrations
+        await asyncio.to_thread(_run_migrations)
         await _bootstrap_admin()
         async with mcp_instance.session_manager.run():
             try:
@@ -135,6 +139,7 @@ def create_app() -> FastAPI:
     # Trailing-slash rewrite for /mcp. Registered LAST so it's the outermost
     # layer and runs before routing dispatches to the mounted sub-app.
     app.add_middleware(_MCPTrailingSlashMiddleware)
+    app.include_router(openrouter.router)
     app.include_router(projects.router)
     app.include_router(tasks.router)
     app.include_router(progress.router)

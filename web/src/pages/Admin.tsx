@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { OpenRouterSettings } from "../components/OpenRouterSettings";
 import { api } from "../api";
 import { useT, localeBcp47 } from "../i18n.tsx";
 
@@ -164,6 +165,7 @@ Authorization = ${JSON.stringify(`Bearer ${mintedToken.token}`)}` : "";
         <h3>{t("admin.mcpTitle")}</h3>
         <p className="muted">{t("admin.mcpHint")}</p>
         <p className="muted">{t("admin.mcpSteps")}</p>
+        <OpenRouterSettings />
       </section>
       {/* Tokens */}
       <section style={{ marginBottom: 32 }}>

@@ -35,6 +35,13 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
 
 
+class AgentProjectPath(SQLModel, table=True):
+    """A client's checkout path; never a server filesystem permission."""
+    project_id: int = Field(foreign_key="project.id", primary_key=True, ondelete="CASCADE")
+    agent_name: str = Field(primary_key=True)
+    local_repo_path: str
+
+
 class Task(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     project_id: Optional[int] = Field(default=None, foreign_key="project.id")
@@ -128,3 +135,10 @@ class Token(SQLModel, table=True):
     created_by_user_id: int = Field(foreign_key="user.id")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC).replace(tzinfo=None))
     last_used_at: Optional[datetime] = None
+
+
+class OpenRouterSettings(SQLModel, table=True):
+    id: int = Field(default=1, primary_key=True)
+    model: str = ""
+    api_key_ciphertext: str = ""
+    management_key_ciphertext: str = ""

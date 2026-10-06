@@ -35,7 +35,7 @@ export function Column({ status, tasks, lastProgress, onDrop, onOpen }: Props) {
         flex: "1 1 0",
         minWidth: 190,
         maxWidth: 320,
-        background: "var(--surface)",
+        background: status === "blocked" ? "var(--status-error-soft)" : "var(--surface)",
         border: `1px solid ${over ? "var(--accent)" : "var(--border)"}`,
         borderRadius: "var(--radius-lg)",
         padding: 12,
@@ -65,7 +65,7 @@ export function Column({ status, tasks, lastProgress, onDrop, onOpen }: Props) {
         {tasks.map((tk) => (
           <div
             key={tk.id}
-            draggable
+            draggable={tk.status !== "blocked"}
             onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(tk.id)); }}
             onClick={() => onOpen(tk.id)}
             role="button"

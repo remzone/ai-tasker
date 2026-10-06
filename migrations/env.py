@@ -8,7 +8,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 from sqlmodel import SQLModel
 
 import agent_kanban.models  # noqa: F401  (register tables on metadata)
@@ -40,9 +40,20 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+        # Serialize concurrent server starts before Alembic reads its revision.
+        locked = connection.dialect.name == "postgresql"
+        if locked:
+            connection.execute(text("SELECT pg_advisory_lock(7331010)"))
+            connection.commit()
+        try:
+            context.configure(connection=connection, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if locked:
+                connection.rollback()
+                connection.execute(text("SELECT pg_advisory_unlock(7331010)"))
+                connection.commit()
 
 
 if context.is_offline_mode():

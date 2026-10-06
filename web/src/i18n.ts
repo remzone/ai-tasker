@@ -180,7 +180,10 @@ const en: Catalog = {
   "status.review": "Review",
   "status.acceptance": "Acceptance",
   "status.done": "Done",
-  "status.blocked": "Blocked",
+  "status.blocked": "Blocker",
+  "blocker.waiting": "Waiting for a human to resolve the blocker",
+  "blocker.resolution": "How was the blocker resolved?",
+  "blocker.resolve": "Resolve blocker and return to Ready",
   "status.cancelled": "Cancelled",
 
   // task card
@@ -446,7 +449,10 @@ const ru: Catalog = {
   "status.review": "Проверка",
   "status.acceptance": "Приёмка",
   "status.done": "Выполнено",
-  "status.blocked": "Заблокировано",
+  "status.blocked": "Блокер",
+  "blocker.waiting": "Ожидает решения блокера человеком",
+  "blocker.resolution": "Как решён блокер?",
+  "blocker.resolve": "Блокер решён — вернуть в Готово",
   "status.cancelled": "Отменено",
 
   // task card

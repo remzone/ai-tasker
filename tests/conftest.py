@@ -100,7 +100,7 @@ async def _clean_tables(db_url):
 
             await conn.execute(
                 text(
-                    "TRUNCATE TABLE project, task, progressevent, comment, artifact, "
+                    "TRUNCATE TABLE openroutersettings, project, task, progressevent, comment, artifact, "
                     '"user", token '
                     "RESTART IDENTITY CASCADE"
                 )

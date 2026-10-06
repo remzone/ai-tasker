@@ -166,8 +166,16 @@ async def session() -> AsyncIterator[AsyncSession]:
         yield s
 
 
-def _task_to_dict(task) -> dict:
+async def _task_to_dict(task, s: AsyncSession, agent_name: str) -> dict:
+    from agent_kanban.models import Project
+    from agent_kanban.repo_paths import repository_paths
+
+    project = await s.get(Project, task.project_id) if task.project_id else None
+    paths = await repository_paths(
+        s, project, task.repo_path or (project.repo_path if project else None), agent_name
+    )
     return {
+        **paths,
         "id": task.id,
         "title": task.title,
         "description": task.description,
@@ -183,7 +191,6 @@ def _task_to_dict(task) -> dict:
         "assigned_to": task.assigned_to,
         "project_id": task.project_id,
         "sort_order": task.sort_order,
-        "repo_path": task.repo_path,
         "base_branch": task.base_branch,
         "branch": task.branch,
         "pr_url": task.pr_url,
@@ -219,7 +226,7 @@ def create_mcp() -> FastMCP:
     )
     mcp = FastMCP(
         "agent-kanban",
-        instructions="Before performing work or review, call get_task_context. Read and obey project_agent_instructions and agent_instructions, acceptance criteria and local AGENTS.md. Never expand the permitted file scope silently; ask the human if instructions conflict. Agent execution requires an explicit human run-agent action; repository instructions remain mandatory.",
+        instructions="Before performing work or review, call get_task_context. Read and obey project_agent_instructions and agent_instructions, acceptance criteria and local AGENTS.md. Never expand the permitted file scope silently; ask the human if instructions conflict. Use set_project_path to register your local checkout before work when shared paths differ. Claim the task or review through MCP before working; repository instructions remain mandatory.",
         streamable_http_path="/",
         transport_security=security,
     )
@@ -250,7 +257,7 @@ def create_mcp() -> FastMCP:
             )
             if task is None:
                 return None
-            return _task_to_dict(task)
+            return await _task_to_dict(task, s, principal.agent_name)
 
     @mcp.tool()
     async def claim_task(task_id: int, agent: str) -> dict:
@@ -258,13 +265,13 @@ def create_mcp() -> FastMCP:
 
         Returns {ok: bool, reason: str?, task: Task?}.
         """
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         async with session() as s:
             result = await svc_claim_task(s, task_id, agent)
             return {
                 "ok": result.ok,
                 "reason": result.reason,
-                "task": _task_to_dict(result.task) if result.task else None,
+                "task": await _task_to_dict(result.task, s, principal.agent_name) if result.task else None,
             }
 
     @mcp.tool()
@@ -280,7 +287,7 @@ def create_mcp() -> FastMCP:
         status_enum = TaskStatus(status) if status else None
         async with session() as s:
             tasks = await svc_list_tasks(s, status_enum, tags_any, agent=principal.agent_name, project_id=project_id)
-            return [_task_to_dict(t) for t in tasks]
+            return [await _task_to_dict(t, s, principal.agent_name) for t in tasks]
 
     @mcp.tool()
     async def post_progress(
@@ -298,6 +305,8 @@ def create_mcp() -> FastMCP:
         artifact: {path, kind} required when kind == artifact_ref
         status: {from, to, note} required when kind == status_change
 
+        Report blockers with kind="status_change", status={"to": "blocked"}
+        and a description in content. Only a human can resolve the blocker.
         Requires task.claimed_by == agent.
         """
         await _require_matching_agent(agent)
@@ -324,20 +333,20 @@ def create_mcp() -> FastMCP:
         task_id: int, agent: str, summary: Optional[str] = None
     ) -> dict:
         """Submit completed work for AI review (compatibility alias of request_review). Never marks Done; human acceptance is required."""
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         async with session() as s:
             task = await svc_complete_task(s, task_id, agent, summary)
-            return _task_to_dict(task)
+            return await _task_to_dict(task, s, principal.agent_name)
 
     @mcp.tool()
     async def request_review(
         task_id: int, agent: str, summary: Optional[str] = None
     ) -> dict:
         """Submit an active task for AI review. A nonempty summary describing files/commits/tests is required. Requires task.claimed_by == agent; cannot bypass human acceptance."""
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         async with session() as s:
             task = await svc_request_review(s, task_id, agent, summary)
-            return _task_to_dict(task)
+            return await _task_to_dict(task, s, principal.agent_name)
 
     @mcp.tool()
     async def get_comments(
@@ -387,6 +396,8 @@ def create_mcp() -> FastMCP:
     ) -> dict:
         """Register an artifact file. Path must be inside an allow-listed root.
 
+        Report blockers with kind="status_change", status={"to": "blocked"}
+        and a description in content. Only a human can resolve the blocker.
         Requires task.claimed_by == agent.
         """
         await _require_matching_agent(agent)
@@ -407,10 +418,10 @@ def create_mcp() -> FastMCP:
         Stores branch on the task so the UI can show it and request_review can
         collect a diff against the base branch. Requires task.claimed_by == agent.
         """
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         async with session() as s:
             task = await svc_set_task_branch(s, task_id, agent, branch)
-            return _task_to_dict(task)
+            return await _task_to_dict(task, s, principal.agent_name)
 
     @mcp.tool()
     async def set_task_pr(
@@ -420,28 +431,48 @@ def create_mcp() -> FastMCP:
 
         status: "open" | "merged" | "closed". Requires task.claimed_by == agent.
         """
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         async with session() as s:
             task = await svc_set_task_pr(s, task_id, agent, pr_url, status)
-            return _task_to_dict(task)
+            return await _task_to_dict(task, s, principal.agent_name)
 
     @mcp.tool()
     async def list_projects() -> list[dict]:
-        """Discover projects and their repository paths."""
-        await _require_any_principal()
+        """Discover projects with your personal paths (server_repo_path is shared)."""
+        principal = await _require_any_principal()
         from agent_kanban.models import Project
         from sqlmodel import select
         async with session() as s:
             rows = (await s.execute(select(Project).order_by(Project.id))).scalars()
-            return [p.model_dump(mode="json") for p in rows]
+            from agent_kanban.repo_paths import repository_paths
+            return [
+                dict(p.model_dump(mode="json"), **await repository_paths(
+                    s, p, p.repo_path, principal.agent_name
+                ))
+                for p in rows
+            ]
+
+    @mcp.tool()
+    async def set_project_path(project_id: int, local_repo_path: Optional[str] = None) -> dict:
+        """Set your persistent local checkout path for a shared project (WSL/Ubuntu absolute Linux path).
+
+        Identity comes from your Bearer token; other agents and shared paths are unchanged.
+        Omit local_repo_path or pass null to remove your override. The server does not access
+        this client path. Call get_task_context again after changing it. Task subdirectories
+        are mapped relative to the shared project root; unrelated repositories are unresolved.
+        """
+        principal = await _require_any_principal()
+        from agent_kanban.repo_paths import set_project_path as save_path
+        async with session() as s:
+            return await save_path(s, project_id, principal.agent_name, local_repo_path)
 
     @mcp.tool()
     async def get_task_context(task_id: int) -> dict:
         """Required before execution or review: read project/task restrictions, full agent_prompt, task, criteria, repository, comments, attachments, results and history. Read repository AGENTS.md/skills locally before working."""
-        await _require_any_principal()
+        principal = await _require_any_principal()
         from agent_kanban.services import task_context
         async with session() as s:
-            return await task_context(s, task_id)
+            return await task_context(s, task_id, agent_name=principal.agent_name)
 
     @mcp.tool()
     async def get_next_review() -> Optional[dict]:
@@ -452,24 +483,24 @@ def create_mcp() -> FastMCP:
         from sqlmodel import select
         async with session() as s:
             task = (await s.execute(select(Task).where(Task.status == TaskStatus.REVIEW, Task.reviewer.is_(None), or_(Task.review_assigned_to.is_(None), Task.review_assigned_to == principal.agent_name)).order_by(Task.updated_at, Task.id).limit(1))).scalars().first()
-            return _task_to_dict(task) if task else None
+            return await _task_to_dict(task, s, principal.agent_name) if task else None
 
     @mcp.tool()
     async def claim_review(task_id: int, agent: str) -> dict:
         """Atomically reserve an AI review for the authenticated reviewer. Preserves the implementation author."""
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         from agent_kanban.services import claim_review as claim
         async with session() as s:
             result = await claim(s, task_id, agent)
-            return {"ok": result.ok, "reason": result.reason, "task": _task_to_dict(result.task) if result.task else None}
+            return {"ok": result.ok, "reason": result.reason, "task": await _task_to_dict(result.task, s, principal.agent_name) if result.task else None}
 
     @mcp.tool()
     async def submit_review(task_id: int, agent: str, decision: str, comment: str) -> dict:
         """After claim_review: APPROVE → acceptance; REQUEST_CHANGES → in_progress (available for claim_task). Findings are mandatory and preserved. Never closes the task."""
-        await _require_matching_agent(agent)
+        principal = await _require_matching_agent(agent)
         from agent_kanban.services import submit_review as submit
         async with session() as s:
-            return _task_to_dict(await submit(s, task_id, agent, decision, comment))
+            return await _task_to_dict(await submit(s, task_id, agent, decision, comment), s, principal.agent_name)
 
     return mcp
 

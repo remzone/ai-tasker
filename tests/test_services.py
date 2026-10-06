@@ -376,3 +376,30 @@ async def test_post_progress_artifact_ref_without_matching_row(session: AsyncSes
     )
     assert "id" not in ev.payload["artifact"]
     assert ev.payload["artifact"]["path"] == "/nonexistent/file"
+
+
+@pytest.mark.asyncio
+async def test_blocker_requires_human_resolution(session: AsyncSession):
+    from agent_kanban.services import human_workflow, update_task, claim_review
+    from agent_kanban.schemas import TaskUpdate
+
+    task = await create_task(session, TaskCreate(title="blocked work", status=TaskStatus.READY))
+    await claim_task(session, task.id, "codex")
+    await post_progress(session, task.id, ProgressCreate(
+        agent="codex", kind=ProgressKind.STATUS_CHANGE,
+        content="Need credentials from the owner", status={"to": "blocked"},
+    ))
+    await session.refresh(task)
+    assert task.status == TaskStatus.BLOCKED
+    assert task.claimed_by is None
+    assert not (await claim_task(session, task.id, "codex")).ok
+    assert not (await claim_review(session, task.id, "reviewer")).ok
+    with pytest.raises(ValueError):
+        await complete_task(session, task.id, "codex")
+    with pytest.raises(ValueError):
+        await update_task(session, task.id, TaskUpdate(status=TaskStatus.READY))
+    with pytest.raises(ValueError):
+        await human_workflow(session, task.id, "user:1", "ready")
+    resolved = await human_workflow(session, task.id, "user:1", "ready", "Credentials provided")
+    assert resolved.status == TaskStatus.READY
+    assert (await claim_task(session, task.id, "codex")).ok

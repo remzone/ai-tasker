@@ -8,7 +8,7 @@ import { Column } from "../components/Column";
 import { NewTaskModal } from "../components/NewTaskModal";
 import { useT } from "../i18n.tsx";
 
-const COLUMNS: TaskStatus[] = ["todo", "ready", "in_progress", "review", "acceptance", "done"];
+const COLUMNS: TaskStatus[] = ["todo", "ready", "in_progress", "review", "acceptance", "blocked", "done"];
 
 export function Board({ project, onOpenTask, onProjectUpdated }: { project: Project; onProjectUpdated: (p: Project) => void; onOpenTask: (id: number) => void }) {
   const { t } = useT();
@@ -56,6 +56,7 @@ export function Board({ project, onOpenTask, onProjectUpdated }: { project: Proj
     const task = tasks.find(entry => entry.id === taskId);
     if (!task || task.status === status) return;
     setError("");
+    if (task.status === "blocked") { onOpenTask(taskId); return; }
     if ((status === "review" || status === "done" || (status === "in_progress" && ["review", "acceptance"].includes(task.status))) && ["in_progress", "review", "acceptance"].includes(task.status)) {
       setWorkflowTask(task); return;
     }
@@ -118,7 +119,7 @@ export function Board({ project, onOpenTask, onProjectUpdated }: { project: Proj
       {settings && <ProjectSettingsModal project={project} onClose={() => setSettings(false)} onSaved={onProjectUpdated} />}
       {showNew && <NewTaskModal project={project} onClose={() => setShowNew(false)} onCreated={() => refresh()} />}
       <p className="muted" style={{ marginTop: 16 }}>{t("board.tipNew")}</p>
-      {tasks.some(tk => tk.status === "blocked" || tk.status === "cancelled") && <details><summary>{t("board.legacy")}</summary>{tasks.filter(tk => tk.status === "blocked" || tk.status === "cancelled").map(tk => <button className="btn" key={tk.id} onClick={() => onOpenTask(tk.id)}>#{tk.id} {tk.title}</button>)}</details>}
+      {tasks.some(tk => tk.status === "cancelled") && <details><summary>{t("board.legacy")}</summary>{tasks.filter(tk => tk.status === "cancelled").map(tk => <button className="btn" key={tk.id} onClick={() => onOpenTask(tk.id)}>#{tk.id} {tk.title}</button>)}</details>}
     </div>
   );
 }

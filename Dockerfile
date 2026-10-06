@@ -20,4 +20,5 @@ RUN uv sync --frozen --no-dev
 COPY --from=web-builder /web/dist ./static
 ENV AGENT_KANBAN_STATIC_DIR=/app/static
 EXPOSE 7331
-CMD ["sh", "-c", "/app/.venv/bin/kanban migrate && /app/.venv/bin/kanban serve --host 0.0.0.0 --port 7331"]
+# The server lifespan applies migrations before accepting requests.
+CMD ["/app/.venv/bin/kanban", "serve", "--host", "0.0.0.0", "--port", "7331"]

@@ -284,8 +284,8 @@ async def test_tools_list_core_tools_registered():
         "set_task_pr",
     }
     assert expected.issubset(names), f"missing: {expected - names}"
-    assert {"list_projects", "get_task_context", "get_next_review", "claim_review", "submit_review"}.issubset(names)
-    assert len(names) == 16
+    assert {"list_projects", "set_project_path", "get_task_context", "get_next_review", "claim_review", "submit_review"}.issubset(names)
+    assert len(names) == 17
 
 
 @pytest.mark.asyncio

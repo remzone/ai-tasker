@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { taskTemplate } from "../agentTemplates";
+import type { DraftResult } from "../api";
 import { api } from "../api";
 import { useT } from "../i18n.tsx";
 import type { Project, Task } from "../types";
@@ -24,6 +25,16 @@ export function NewTaskModal({ onClose, onCreated, project, task }: {
   const descriptionInput = useRef<HTMLTextAreaElement>(null);
   const previewUrls = useRef<string[]>([]);
   useEffect(() => () => { previewUrls.current.forEach(url => URL.revokeObjectURL(url)); }, []);
+  const [draft, setDraft] = useState<DraftResult | null>(null);
+  const [draftMode, setDraftMode] = useState<"spec" | "criteria">("spec");
+  const [generating, setGenerating] = useState(false);
+  async function generate(mode: "spec" | "criteria") {
+    setGenerating(true); setError(""); setDraft(null); setDraftMode(mode);
+    try {
+      setDraft(await api.draftTask({ mode, title, description, acceptance_criteria: criteria, agent_instructions: instructions, project_instructions: projectInstructions, language: locale === "ru" ? "ru" : "en" }));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setGenerating(false); }
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => { if (task?.project_id) api.getProject(task.project_id).then(p => setProjectInstructions(p.agent_instructions)).catch(e => setError(String(e))); }, [task?.project_id]);
@@ -84,6 +95,18 @@ export function NewTaskModal({ onClose, onCreated, project, task }: {
       <button className="btn" type="button" disabled={busy} onClick={() => { setDescription(previous => [previous, taskTemplate(locale)].filter(Boolean).join("\n\n")); if (!criteria) setCriteria(locale === "ru" ? "- [критерий 1]\n- [критерий 2]\n- [критерий 3]" : "- [criterion 1]\n- [criterion 2]\n- [criterion 3]"); }}>{t("instructions.taskTemplate")}</button>
       <label>{t("newTask.descLabel")}<textarea aria-label={t("newTask.descLabel")} ref={descriptionInput} className="input" rows={4} disabled={busy} onPaste={pasteScreenshots} value={description} onChange={e => setDescription(e.target.value)} placeholder={t("newTask.descPlaceholder")} /></label>
       <small className="muted">{t("form.pasteHint")}</small>
+      <div className="form-actions">
+        <button className="btn" type="button" disabled={busy || generating || !(title.trim() || description.trim())} onClick={() => generate("spec")}>{locale === "ru" ? "Подготовить ТЗ через OpenRouter" : "Draft specification with OpenRouter"}</button>
+        <button className="btn" type="button" disabled={busy || generating || !(title.trim() || description.trim())} onClick={() => generate("criteria")}>{locale === "ru" ? "Сгенерировать критерии приёмки" : "Generate acceptance criteria"}</button>
+      </div>
+      {generating && <p role="status">{locale === "ru" ? "OpenRouter готовит предложение…" : "OpenRouter is drafting…"}</p>}
+      {draft && <section className="panel">
+        <h3>{locale === "ru" ? "Предложение OpenRouter" : "OpenRouter suggestion"}</h3>
+        {draftMode === "spec" && <><strong>{draft.title}</strong><div className="markdown"><ReactMarkdown>{draft.description}</ReactMarkdown></div><div className="markdown"><ReactMarkdown>{draft.agent_instructions}</ReactMarkdown></div></>}
+        <div className="markdown"><ReactMarkdown>{draft.acceptance_criteria}</ReactMarkdown></div>
+        <button className="btn btn-primary" type="button" disabled={busy} onClick={() => { if (draftMode === "spec") { setTitle(draft.title); setDescription(draft.description); setInstructions(draft.agent_instructions); } setCriteria(draft.acceptance_criteria); setDraft(null); }}>{locale === "ru" ? "Применить к форме" : "Apply to form"}</button>
+        <button className="btn" type="button" onClick={() => setDraft(null)}>{locale === "ru" ? "Отклонить" : "Dismiss"}</button>
+      </section>}
       {(/!\[[^\]]*\]\(/.test(description)) && <div className="description-preview markdown" aria-label={t("form.preview")}>
         <ReactMarkdown components={{ img: ({ src, alt }) => <img src={screenshots.find(image => image.marker === src)?.preview ?? src} alt={alt} /> }}>{description}</ReactMarkdown>
       </div>}
@@ -96,7 +119,7 @@ export function NewTaskModal({ onClose, onCreated, project, task }: {
       <label className="file-picker">{t("form.files")}<span className="btn">{t("form.upload")}</span><input type="file" multiple disabled={busy} onChange={e => { setFiles(previous => [...previous, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }} /><small className="muted">{t("form.fileHint")}</small></label>
       {files.map((f, i) => <small className="muted" key={i}>{f.name}<br /></small>)}
       {error && <p role="alert" className="error-banner">{error}</p>}
-      <div className="form-actions"><button className="btn" type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="btn btn-primary" disabled={busy || !title.trim()}>{busy ? t("newTask.creating") : task || savedId ? t("form.save") : t("newTask.create")}</button></div>
+      <div className="form-actions"><button className="btn" type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button className="btn btn-primary" disabled={busy || generating || !title.trim()}>{busy ? t("newTask.creating") : task || savedId ? t("form.save") : t("newTask.create")}</button></div>
     </form>
   </div>;
 }
